@@ -1,10 +1,8 @@
 # OpenForge
 OpenForge is a open-source and open-contribution rewrite of the [MonkeForge](https://monkeforge.org) API and website in C#.
 
-As of now, it is a work-in-progress.
-
 ## Installation
-OpenForge is distributed over GitHub releases and on our website.
+OpenForge is distributed over [GitHub releases](https://github.com/gtmonkeforge/openforge/releases) and [on our website](https://monkeforge.org/software/openforge).
 
 ## History
 ### Why?

@@ -1,0 +1,5 @@
+set "OutputDir=%LOCALAPPDATA%\Programs\MonkeForgeCLI"
+if not exist "%OutputDir%" mkdir "%OutputDir%"
+curl -sL "https://github.com/gtmonkeforge/cli/releases/latest/download/mforge-win-x64.exe" -o "%OutputDir%\mforge.exe"
+setx PATH "%PATH%;%OutputDir%"
+for /f "tokens=2*" %%A in ('reg query "HKCU\Environment" /v PATH') do set "PATH=%%B"
