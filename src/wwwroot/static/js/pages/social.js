@@ -105,7 +105,7 @@ async function chat(root) {
         root.querySelector('#decline')?.addEventListener('click', () => api('/api/v1/chat/' + c.id + '/decline', { method: 'POST' }).then(load));
 
         const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-        const html = messages.items.map(m => `<div class="message ${m.sender === auth.user.id ? 'own' : ''}">${avatar(m.author, 'sm')}<div><div class="bubble">${esc(m.body)}</div><time>${esc(ago(m.created))}</time></div></div>`).join('') || '<p class="hint">No messages yet.</p>';
+        const html = messages.items.map(m => `<div class="message ${m.sender === auth.user.id ? 'own' : ''}">${avatar(m.author, 'sm')}<div class="message-body"><div class="bubble">${esc(m.body)}</div><time>${esc(ago(m.created))}</time></div></div>`).join('') || '<p class="hint">No messages yet.</p>';
 
         if (box.innerHTML !== html)
             box.innerHTML = html;

@@ -205,7 +205,7 @@ function bindNotifications(header) {
         }
 
         wrap.insertAdjacentHTML('beforeend', `<div class="dropdown">
-            <div class="row"><strong>Notifications</strong><span class="spacer"></span>${items.length ? '<button class="button ghost small" id="mark-read">Mark all read</button>' : ''}</div>
+            <div class="dropdown-head"><strong>Notifications</strong><span class="spacer"></span>${items.length ? '<button class="button ghost small" id="mark-read">Mark all read</button>' : ''}</div>
             <hr>
             <div class="notification-list">${items.length
                 ? items.slice().reverse().map(n => `<a class="notification" href="${esc(notificationLink(n))}">${esc(n.body)}<time>${esc(ago(n.created))}</time></a>`).join('')

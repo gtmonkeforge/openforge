@@ -248,7 +248,8 @@ export function shieldState(report) {
 
 export function shieldRing(report) {
     const s = shieldState(report);
-    return `<div class="ring ${s.state === 'fail' ? 'fail' : s.state === 'unknown' ? 'unknown' : ''}">${ring(s.measured ? 100 - s.risk : 0, s.state)}<div><strong>${s.measured ? s.risk.toFixed(2) + '%' : '—'}</strong><small>risk</small></div></div>`;
+    const tone = !s.measured ? 'unknown' : s.risk < 15 ? '' : 'fail';
+    return `<div class="ring ${tone}">${ring(s.measured ? 100 - s.risk : 0, s.state)}<div><strong>${s.measured ? s.risk.toFixed(2) + '%' : '—'}</strong><small>risk</small></div></div>`;
 }
 
 async function loadShield(mod, shieldUrl) {
