@@ -12,20 +12,24 @@ public sealed class ModPresenter
     private readonly ForgeOptions _options;
     private readonly Channels _channels;
     private readonly MarkdownRenderer _markdown;
+    private readonly Payments _payments;
+    private readonly ForgeContext _context;
     private HashSet<string>? _topTen;
 
-    public ModPresenter(Db db, ForgeOptions options, Channels channels, MarkdownRenderer markdown)
+    public ModPresenter(Db db, ForgeOptions options, Channels channels, MarkdownRenderer markdown, Payments payments, ForgeContext context)
     {
+        _context = context;
         _db = db;
         _options = options;
         _channels = channels;
         _markdown = markdown;
+        _payments = payments;
     }
 
     public ReleaseDto Release(ReleaseRow row)
     {
         List<DownloadDto> downloads = _db.Query<FileRow>(
-            "SELECT f.id,f.filename,f.size,f.sha256,f.kind,COALESCE(l.loader,'bepinex5') AS loader FROM files f LEFT JOIN file_loaders l ON l.file_id=f.id WHERE f.release_id=@id",
+            "SELECT f.id,f.stored_name,f.filename,f.size,f.sha256,f.kind,COALESCE(l.loader,'bepinex5') AS loader FROM files f LEFT JOIN file_loaders l ON l.file_id=f.id WHERE f.release_id=@id",
             new { id = row.Id })
             .Select(file => new DownloadDto
             {
@@ -35,7 +39,8 @@ public sealed class ModPresenter
                 Sha256 = file.Sha256,
                 Kind = file.Kind,
                 Loader = file.Loader,
-                Url = _options.PublicUrl + "/api/v1/downloads/" + file.Id,
+                // Sealed injector files have no download URL at all; the injector API is the only way to get them.
+                Url = PayloadVault.IsSealed(file.StoredName) ? "" : _options.PublicUrl + "/api/v1/downloads/" + file.Id,
             })
             .ToList();
 
@@ -123,6 +128,16 @@ public sealed class ModPresenter
             Id = id,
             Url = _options.PublicUrl + "/view/" + id,
             Loaders = ReleaseLoaders(row.Guid, channelName),
+            PriceCents = row.PriceCents,
+            Currency = _options.Currency,
+            UsesInjector = row.Injected,
+            Owned = _payments.CanUse(row),
+            Gated = _payments.IsGated(row),
+            MinTierCents = _db.One<long?>("""
+                SELECT MIN(t.price_cents) FROM subscription_tiers t WHERE t.archived_at IS NULL
+                AND (t.guid=@guid OR EXISTS(SELECT 1 FROM tier_mods tm WHERE tm.tier_id=t.id AND tm.guid=@guid))
+                """, new { guid = row.Guid }),
+            DonationsEnabled = _options.StripeConfigured && row.AuthorTransfers != 0,
         };
 
         if (!full && row.Visibility == "code")
@@ -147,6 +162,8 @@ public sealed class ModPresenter
         mod.CurrentVersion = selected.CurrentVersion;
         mod.Releases = Releases(row.Guid, channelName);
         mod.DescriptionHtml = _markdown.Render(row.Description);
+        mod.Tiers = Endpoints.SubscriptionEndpoints.TiersForMod(_db, row.Guid)
+            .Select(t => Endpoints.SubscriptionEndpoints.Present(t, _db, _options, _context.User?.Id, false)).ToList();
 
         return mod;
     }

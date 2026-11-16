@@ -63,3 +63,5 @@ src/data/
 
 # Build output
 dist/
+
+.DS_Store

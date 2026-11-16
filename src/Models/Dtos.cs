@@ -133,6 +133,16 @@ public sealed class ModDto
     public string Id { get; init; } = "";
     public string Url { get; set; } = "";
     public List<string> Loaders { get; init; } = [];
+    public long PriceCents { get; init; }
+    public string Currency { get; init; } = "usd";
+    public bool UsesInjector { get; init; }
+    public bool Owned { get; init; }
+    public bool DonationsEnabled { get; init; }
+    public bool Gated { get; init; }
+    public long? MinTierCents { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TierDto>? Tiers { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ChannelDto? Channel { get; set; }
@@ -166,3 +176,22 @@ public sealed class FriendDto
     public string? RoomCode { get; init; }
     public bool Joinable { get; init; }
 }
+
+public sealed class TierDto
+{
+    public string Id { get; init; } = "";
+    public string OwnerId { get; init; } = "";
+    public string OwnerName { get; init; } = "";
+    public string? Guid { get; init; }
+    public string Scope { get; init; } = "mod";
+    public string Name { get; init; } = "";
+    public List<string> Benefits { get; init; } = [];
+    public long PriceCents { get; init; }
+    public string Currency { get; init; } = "usd";
+    public bool Subscribed { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TierModDto>? Mods { get; init; }
+}
+
+public sealed record TierModDto(string Guid, string Name);

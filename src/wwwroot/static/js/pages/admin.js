@@ -1,4 +1,4 @@
-import { api, app, applyWidths, auth, categories, date, esc, icon, modIcon, number, pagination, setTitle, showError, toast, userBadges } from '../core.js';
+import { api, app, applyWidths, auth, categories, date, esc, icon, modIcon, money, number, pagination, setTitle, showError, toast, userBadges } from '../core.js';
 
 export async function render() {
     if (!auth.user?.is_admin) {
@@ -7,7 +7,7 @@ export async function render() {
     }
 
     setTitle('Admin');
-    const tabs = ['Mods', 'Users', 'Analytics', 'Errors', ...(auth.user.is_root ? ['Admins'] : [])];
+    const tabs = ['Mods', 'Disputes', 'Users', 'Analytics', 'Errors', ...(auth.user.is_root ? ['Admins'] : [])];
     let active = new URLSearchParams(location.search).get('tab') || 'Mods';
 
     if (!tabs.includes(active))
@@ -31,6 +31,8 @@ export async function render() {
         try {
             if (tab === 'Mods')
                 await mods(body, alive);
+            else if (tab === 'Disputes')
+                await disputes(body, alive);
             else if (tab === 'Analytics')
                 await analytics(body, alive);
             else if (tab === 'Errors')
@@ -79,12 +81,12 @@ async function mods(body, alive) {
         </article>`).join('') : '<div class="empty"><h2>Queue is empty</h2><p>Choose another status to see other submissions.</p></div>';
 
         body.querySelectorAll('[data-status]').forEach(b => b.onclick = async () => {
-            if (b.dataset.status === 'deleted' && !confirm('Remove this mod from listings and downloads? It stays in the deleted queue.'))
+            if (b.dataset.status === 'deleted' && !confirm('Remove this mod from listings and downloads? It stays in the deleted queue. Its monthly tiers end now and subscribers stop being billed.'))
                 return;
 
             try {
-                await api('/api/v1/admin/mods/' + encodeURIComponent(b.dataset.guid), { method: 'PATCH', json: { status: b.dataset.status } });
-                toast('Mod status updated.');
+                const result = await api('/api/v1/admin/mods/' + encodeURIComponent(b.dataset.guid), { method: 'PATCH', json: { status: b.dataset.status } });
+                toast(result.subscriptions_failed ? `Mod status updated, but ${result.subscriptions_failed} subscription(s) couldn’t be cancelled. Cancel them in Stripe.` : result.subscriptions_cancelled ? `Mod status updated. ${result.subscriptions_cancelled} subscription(s) cancelled.` : 'Mod status updated.', result.subscriptions_failed ? 'error' : '');
                 await load();
             } catch (error) {
                 toast(error.message, 'error');
@@ -341,4 +343,49 @@ async function errors(body) {
     const data = await api('/api/v1/admin/errors');
     body.innerHTML = data.items.length ? data.items.map(e => `<details class="surface error-log"><summary class="row"><code>${esc(e.id)}</code><strong>${esc(e.exception_type)}</strong><span class="hint mono">${esc(e.method)} ${esc(e.path)}</span><span class="spacer"></span><span class="hint">${esc(date(e.created_at))}</span></summary><p>${esc(e.message)}</p><pre>${esc(e.traceback)}</pre></details>`).join('<div class="gap"></div>')
         : '<div class="empty"><h2>No errors recorded</h2><p>The last 50 unexpected server errors appear here.</p></div>';
+}
+
+async function disputes(body, alive) {
+    body.innerHTML = `<div class="toolbar"><select id="dispute-status" aria-label="Status"><option value="open">Open</option><option value="accepted">Refunded</option><option value="rejected">Rejected</option><option value="all">All</option></select>
+        <span class="hint">Accepting refunds the buyer in full, including the platform fee. For memberships it refunds the latest payment and ends the subscription.</span></div><div id="dispute-list"></div>`;
+
+    const load = async () => {
+        const data = await api('/api/v1/admin/disputes?status=' + body.querySelector('#dispute-status').value);
+
+        if (!alive())
+            return;
+
+        body.querySelector('#dispute-list').innerHTML = data.items.length ? data.items.map(d => `<article class="surface panel dispute">
+            <div class="row"><strong>${esc(d.kind === 'purchase' ? 'Purchase' : 'Membership')}</strong>
+                <span>${d.guid ? `<a href="/view/${encodeURIComponent(d.guid)}">${esc(d.mod_name || d.guid)}</a>` : ''}${d.tier_name ? ' · ' + esc(d.tier_name) : ''}</span>
+                <span class="spacer"></span>${d.amount_cents != null ? `<span class="mono">${esc(money(d.amount_cents, d.currency))}</span>` : ''}
+                <span class="pill ${d.status === 'open' ? 'warn' : d.status === 'accepted' ? 'good' : ''}">${esc(d.status === 'accepted' ? 'refunded' : d.status)}</span></div>
+            <p class="hint">Buyer <a href="/profile/${encodeURIComponent(d.user.id)}">${esc(d.user.name)}</a>${d.seller ? ` · Seller <a href="/profile/${encodeURIComponent(d.seller.id)}">${esc(d.seller.name)}</a>` : ''} · opened ${esc(date(d.created_at))}${d.paid_at ? ` · paid ${esc(date(d.paid_at))}` : ''}</p>
+            <blockquote class="dispute-reason">${esc(d.reason)}</blockquote>
+            ${d.staff_note ? `<p class="hint">Staff note: ${esc(d.staff_note)}</p>` : ''}
+            ${d.status === 'open' ? `<div class="row"><input class="grow" data-note="${esc(d.id)}" maxlength="2000" placeholder="Note to the buyer (optional)" aria-label="Note to the buyer"><button class="button subtle small" data-resolve="reject" data-id="${esc(d.id)}">Reject</button><button class="button small" data-resolve="accept" data-id="${esc(d.id)}">Accept & refund</button></div>` : ''}
+        </article>`).join('') : '<div class="empty"><h2>No disputes here</h2><p>Disputes opened by buyers show up in this list.</p></div>';
+
+        body.querySelectorAll('[data-resolve]').forEach(button => button.onclick = async () => {
+            const accept = button.dataset.resolve === 'accept';
+
+            if (accept && !confirm('Refund this buyer in full? The money comes back out of the seller’s Stripe balance.'))
+                return;
+
+            button.disabled = true;
+
+            try {
+                const note = body.querySelector(`[data-note="${CSS.escape(button.dataset.id)}"]`).value;
+                await api('/api/v1/admin/disputes/' + encodeURIComponent(button.dataset.id) + '/resolve', { method: 'POST', json: { action: button.dataset.resolve, note } });
+                toast(accept ? 'Refund issued.' : 'Dispute closed.');
+                await load();
+            } catch (error) {
+                toast(error.message, 'error');
+                button.disabled = false;
+            }
+        });
+    };
+
+    body.querySelector('#dispute-status').onchange = load;
+    await load();
 }

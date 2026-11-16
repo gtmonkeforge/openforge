@@ -102,6 +102,23 @@ public static class ModEndpoints
             parameters.Add("kind", fileType);
         }
 
+        // "Paid" matches Payments.IsGated: a one-time price, or any live subscription tier that unlocks the mod.
+        const string paid = "(m.price_cents>0 OR EXISTS(SELECT 1 FROM subscription_tiers t WHERE t.archived_at IS NULL AND (t.guid=m.guid OR EXISTS(SELECT 1 FROM tier_mods tm WHERE tm.tier_id=t.id AND tm.guid=m.guid))))";
+
+        switch (Query("price"))
+        {
+            case "":
+                break;
+            case "free":
+                conditions.Add("NOT " + paid);
+                break;
+            case "paid":
+                conditions.Add(paid);
+                break;
+            default:
+                throw ApiException.BadRequest("Price must be free or paid.");
+        }
+
         if (Query("mine") == "true")
         {
             CurrentUser mine = context.RequireUser("Sign in to view your mods.");
@@ -203,7 +220,7 @@ public static class ModEndpoints
         return Api.Json(presenter.Mod(access.ModWithAuthor(row.Guid)!, true));
     }
 
-    private static async Task<IResult> SetVisibilityAsync(string value, HttpRequest request, ForgeContext context, Access access, Db db)
+    private static async Task<IResult> SetVisibilityAsync(string value, HttpRequest request, ForgeContext context, Access access, Db db, Payments payments)
     {
         CurrentUser current = context.RequireUser("Sign in to manage visibility.");
         db.BeginImmediate();
@@ -220,6 +237,10 @@ public static class ModEndpoints
         if (payload == null || !payload.HasExactly("visibility") || !payload["visibility"].IsString(out string visibility) || !Text.Visibilities.Contains(visibility))
             throw ApiException.BadRequest("Choose public, private, or code visibility.");
 
+        // Hiding a mod people have paid for would lock them out, so paid mods stay public.
+        if (visibility != "public" && payments.IsGated(row))
+            throw ApiException.Conflict("Paid mods and mods with tiers must stay public. Remove the price and tiers first.");
+
         string status = row.Status;
 
         if (visibility != row.Visibility)
@@ -231,7 +252,7 @@ public static class ModEndpoints
         return Api.Json(new { visibility, status });
     }
 
-    private static async Task DownloadAsync(string fileId, HttpContext http, Db db, Access access, Channels channels, Storage storage, Activity activity)
+    private static async Task DownloadAsync(string fileId, HttpContext http, Db db, Access access, Channels channels, Storage storage, Activity activity, Payments payments)
     {
         FileRow? row = db.One<FileRow>("SELECT * FROM files WHERE id=@fileId", new { fileId });
         ReleaseRow? release = row == null ? null : db.One<ReleaseRow>("SELECT * FROM releases WHERE id=@id", new { id = row.ReleaseId });
@@ -245,6 +266,13 @@ public static class ModEndpoints
             throw ApiException.NotFound("Download not found.");
 
         channels.Select(mod!, release.Channel);
+
+        // Injector binaries only ever leave the server encrypted to a registered injector, never as a plain download.
+        if (mod!.Injected || PayloadVault.IsSealed(row.StoredName))
+            throw ApiException.Forbidden("This mod can only be installed through the MonkeForge injector.");
+
+        if (!payments.CanUse(mod))
+            throw new ApiException(402, "Buy this mod to download it.");
 
         string path = storage.FilePath(row.StoredName);
 

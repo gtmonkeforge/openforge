@@ -1,4 +1,7 @@
-import { api, app, auth, avatar, brand, emptyState, esc, icon, modCard, pagination, setTitle, skeletonGrid, toast, userBadges } from '../core.js';
+import { api, app, auth, avatar, brand, emptyState, esc, icon, modCard, pagination, setTitle, signInUrl, skeletonGrid, toast, userBadges } from '../core.js';
+import { copy, fill } from '../store-copy.js';
+import { bindSubscribe, renderLibrary, tierCard, tierManager } from '../tiers.js';
+import { consumeReturn } from '../store.js';
 
 export async function render(id) {
     let profile = await api('/api/v1/users/' + encodeURIComponent(id));
@@ -49,10 +52,21 @@ export async function render(id) {
 
     app.innerHTML = `
         <section class="surface profile-hero" id="profile-hero"></section>
+        <section id="memberships" hidden></section>
         <div class="section-title"><h2>Published mods</h2><span class="pill mono">${profile.mod_count}</span></div>
         <div id="mods">${skeletonGrid(3)}</div>
-        <div id="mod-pages"></div>`;
+        <div id="mod-pages"></div>
+        ${own ? '<section class="surface panel" id="purchases"><p class="hint">Loading…</p></section>' : ''}`;
     paint();
+    consumeReturn();
+
+    memberships(profile, own).catch(error => toast(error.message, 'error'));
+
+    if (own)
+        renderLibrary(app.querySelector('#purchases')).then(() => {
+            if (location.hash === '#purchases')
+                app.querySelector('#purchases').scrollIntoView({ block: 'start' });
+        }).catch(error => app.querySelector('#purchases').innerHTML = `<p class="error">${esc(error.message)}</p>`);
 
     let page = 1;
 
@@ -217,4 +231,28 @@ function cropper(root) {
         blob: () => bitmap ? new Promise(resolve => canvas.toBlob(resolve, 'image/png')) : Promise.resolve(null),
         dispose: () => bitmap?.close(),
     };
+}
+
+// Creator memberships: visitors see the tiers, the creator (or group owner) also gets the editor.
+async function memberships(profile, own) {
+    const section = app.querySelector('#memberships');
+    const data = await api('/api/v1/users/' + encodeURIComponent(profile.id) + '/tiers');
+
+    if (!data.items.length && !data.can_manage)
+        return;
+
+    section.hidden = false;
+    section.innerHTML = `<div class="section-title"><h2>${esc(copy.membershipsTitle)}</h2></div>
+        ${data.items.length ? `<p class="hint">${esc(fill(copy.membershipsIntro, { name: profile.display_name }))}</p>
+            <div class="tier-grid">${data.items.map(t => tierCard(t, { canSubscribe: !data.can_manage, signInHref: auth.user ? null : signInUrl() })).join('')}</div>` : ''}
+        ${data.can_manage ? '<div class="surface panel" id="membership-manager"></div>' : ''}`;
+    bindSubscribe(section);
+
+    if (data.can_manage) {
+        const payoutsUrl = '/settings/payouts' + (own ? '' : '?account=' + encodeURIComponent(profile.id));
+        await tierManager(section.querySelector('#membership-manager'), {
+            ownerId: profile.id, tiers: data.items, mods: data.mods, linked: data.linked, canSell: data.can_sell, payoutsUrl,
+            reload: () => memberships(profile, own),
+        });
+    }
 }

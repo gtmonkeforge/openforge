@@ -1,4 +1,6 @@
 import { ago, api, auth, avatar, brand, esc, icon, onOutside, signInUrl, toast, userBadges } from './core.js';
+import { openDonate } from './store.js';
+import { copy, fill } from './store-copy.js';
 
 const quips = [
     'Ever heard of MonkeModManager?',
@@ -93,6 +95,8 @@ function userMenu() {
         <hr>
         <div class="label">Account</div>
         <a role="menuitem" href="/settings">${icon('settings')}Settings</a>
+        <a role="menuitem" href="${esc(user.profile_url)}#purchases">${icon('tray')}${esc(copy.purchasesNav)}</a>
+        <a role="menuitem" href="/settings/payouts">${icon('wallet')}${esc(copy.payoutsNav)}</a>
         <a role="menuitem" href="/settings/keys">${icon('key')}Access keys</a>
         <a role="menuitem" href="/settings/channels">${icon('lock')}Unlock a channel</a>
         <a role="menuitem" href="/transfers">${icon('swap')}Ownership transfers</a>
@@ -165,6 +169,15 @@ function notificationLink(item) {
             return '/groups';
         case 'mod_transfer':
             return '/transfers';
+        case 'purchase':
+            return '/view/' + encodeURIComponent(item.target);
+        case 'subscription':
+        case 'dispute':
+            return '/profile#purchases';
+        case 'dispute_staff':
+            return '/admin?tab=Disputes';
+        case 'sale_refund':
+            return '/settings/payouts';
         default:
             return '#';
     }
@@ -242,11 +255,13 @@ export function renderFooter() {
             <a href="/software/openforge">OpenForge</a>
             <a href="/terms">Terms</a>
             <a href="/privacy">Privacy</a>
+            <button type="button" class="footer-link" id="support-platform">${esc(fill(copy.footerSupport, { brand: brand.name }))}</button>
         </nav>
         <span>Community made. Not affiliated with Another Axiom.</span>
         <button type="button" class="version-label" id="version-label" aria-haspopup="dialog" hidden></button>
     </div>`;
 
+    document.querySelector('#support-platform').onclick = () => openDonate({ recipient: 'platform', name: brand.name });
     bindVersion();
 }
 

@@ -110,7 +110,7 @@ public static class AdminEndpoints
         return Api.Json(new { items = rows.Select(r => presenter.Mod(r)).ToList(), total, page, limit, counts });
     }
 
-    private static async Task<IResult> ModerateAsync(string guid, HttpRequest request, ForgeContext context, Db db, Webhooks webhooks)
+    private static async Task<IResult> ModerateAsync(string guid, HttpRequest request, ForgeContext context, Db db, Webhooks webhooks, Subscriptions subscriptions)
     {
         CurrentUser actor = RequireAdmin(context);
         JsonObject? payload = await JsonBody.ReadObjectAsync(request);
@@ -126,12 +126,16 @@ public static class AdminEndpoints
         db.Commit();
         webhooks.NotifyModStatus(guid, previous);
 
-        return Api.Json(new { guid, status });
+        // Taking a mod down ends its paid tiers straight away, so nobody keeps paying for something they can't open.
+        (int cancelled, int failed) = status == "approved" ? (0, 0) : await subscriptions.TakeDownModAsync(guid);
+
+        return Api.Json(new { guid, status, subscriptions_cancelled = cancelled, subscriptions_failed = failed });
     }
 
-    private static IResult PermanentlyDelete(string guid, ForgeContext context, Db db)
+    private static async Task<IResult> PermanentlyDelete(string guid, ForgeContext context, Db db, Subscriptions subscriptions)
     {
         RequireAdmin(context);
+        await subscriptions.TakeDownModAsync(guid);
         db.BeginImmediate();
 
         if (!db.Exists("SELECT 1 FROM mods WHERE guid=@guid", new { guid }))
@@ -255,7 +259,7 @@ public static class AdminEndpoints
         return Api.Json(new { items, total, page, limit });
     }
 
-    private static async Task<IResult> ManageUserAsync(string uid, HttpRequest request, ForgeContext context, Db db, ForgeOptions options)
+    private static async Task<IResult> ManageUserAsync(string uid, HttpRequest request, ForgeContext context, Db db, ForgeOptions options, Subscriptions subscriptions)
     {
         CurrentUser actor = RequireAdmin(context);
         JsonObject? payload = await JsonBody.ReadObjectAsync(request);
@@ -282,7 +286,10 @@ public static class AdminEndpoints
         }
 
         db.Commit();
-        return Api.Ok();
+
+        // A banned account can't sell, so its memberships stop billing now.
+        (int cancelled, int failed) = banning ? await subscriptions.StopSellerAsync(uid) : (0, 0);
+        return Api.Json(new { ok = true, subscriptions_cancelled = cancelled, subscriptions_failed = failed });
     }
 
     private static async Task<IResult> ManageAdminAsync(string uid, HttpRequest request, ForgeContext context, Db db, ForgeOptions options)

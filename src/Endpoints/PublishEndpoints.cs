@@ -218,8 +218,11 @@ public static class PublishEndpoints
 
         try
         {
+            // Injector delivery is chosen when a mod is created and then applies to every release.
+            bool injector = existing?.Injected ?? form["uses_injector"] == "true";
+
             foreach ((IFormFile file, string _) in uploads)
-                stored.Add(await storage.SaveDownloadAsync(file, written));
+                stored.Add(await storage.SaveDownloadAsync(file, written, injector));
 
             IFormFile? logoFile = form.Files.GetFile("logo");
             string? logo;
@@ -277,7 +280,7 @@ public static class PublishEndpoints
                 db.Exec("UPDATE mods SET banner=@banner WHERE guid=@guid", new { banner = await storage.SaveImageAsync(banner, written), guid });
 
             if (existing == null)
-                db.Exec("UPDATE mods SET visibility=@visibility WHERE guid=@guid", new { visibility, guid });
+                db.Exec("UPDATE mods SET visibility=@visibility,uses_injector=@injector WHERE guid=@guid", new { visibility, injector = injector ? 1 : 0, guid });
 
             db.Exec("INSERT OR IGNORE INTO release_channels(guid,name) VALUES(@guid,'stable')", new { guid });
 

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -21,14 +22,22 @@ public static class PageEndpoints
         app.MapGet("/", () => Results.Redirect("/browse"));
         app.MapGet("/browse", Browse);
 
-        foreach (string path in new[] { "/upload", "/settings", "/settings/{section}", "/friends", "/chat", "/groups", "/transfers", "/notifications", "/software" })
-            app.MapGet(path, (Shell shell) => shell.Page());
+        // Signed-in tools carry noindex; only the public pages below are offered to search engines.
+        foreach (string path in new[] { "/upload", "/settings", "/settings/{section}", "/friends", "/chat", "/groups", "/transfers", "/notifications" })
+            app.MapGet(path, (Shell shell) => shell.Page(meta: PageMeta.Private));
 
-        app.MapGet("/software/launchpad", (Shell shell) => shell.Page("Launchpad"));
-        app.MapGet("/software/cli", (Shell shell) => shell.Page("mforge CLI"));
-        app.MapGet("/software/openforge", (Shell shell) => shell.Page("OpenForge Server"));
-        app.MapGet("/terms", (Shell shell) => shell.Page("Terms of Service"));
-        app.MapGet("/privacy", (Shell shell) => shell.Page("Privacy Policy"));
+        app.MapGet("/software", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("Software", seo.Static("/software", $"Tools for using {options.BrandName} outside the browser: the Launchpad app, the mforge command line, and the OpenForge server.")));
+        app.MapGet("/software/launchpad", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("Launchpad", seo.Static("/software/launchpad", $"Launchpad installs your {options.BrandName} mods and starts {(options.BrandGame == "" ? "the game" : options.BrandGame)}. It runs on Windows and Linux, and it’s open source.")));
+        app.MapGet("/software/cli", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("mforge CLI", seo.Static("/software/cli", $"mforge installs and updates {options.BrandName} mods from the command line. It’s written in Go and released under the MIT license.")));
+        app.MapGet("/software/openforge", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("OpenForge Server", seo.Static("/software/openforge", $"OpenForge is the open-source server that runs {options.BrandName}, so you can host your own mod site.")));
+        app.MapGet("/terms", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("Terms of Service", seo.Static("/terms", $"The terms of service for using {options.BrandName}.")));
+        app.MapGet("/privacy", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("Privacy Policy", seo.Static("/privacy", $"How {options.BrandName} collects, uses and protects your data.")));
+        app.MapGet("/robots.txt", (Seo seo) => Results.Text(seo.Robots(), "text/plain; charset=utf-8"));
+        app.MapGet("/sitemap.xml", (HttpContext http, Seo seo) =>
+        {
+            http.Response.Headers.CacheControl = "public, max-age=3600";
+            return Results.Text(seo.Sitemap(), "application/xml; charset=utf-8");
+        });
         app.MapGet("/app", () => Results.Redirect("/software/launchpad"));
         app.MapGet("/get-app", () => Results.Redirect("/software/launchpad"));
 
@@ -39,7 +48,7 @@ public static class PageEndpoints
         app.MapGet("/admin", (ForgeContext context, Shell shell) =>
         {
             AdminEndpoints.RequireAdmin(context);
-            return shell.Page("Admin");
+            return shell.Page("Admin", PageMeta.Private);
         });
 
         app.MapGet("/brand/logo", (ForgeOptions options, IWebHostEnvironment environment) => BrandFile(options.BrandLogo ?? Path.Combine(environment.WebRootPath, "static", "logo.svg")));
@@ -66,13 +75,20 @@ public static class PageEndpoints
         }
     }
 
-    private static IResult Browse(HttpContext http, Shell shell, Activity activity, Diagnostics diagnostics)
+    private static IResult Browse(HttpContext http, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
     {
         RecordView(http, activity, diagnostics, null);
-        return shell.Page("Browse");
+
+        // "Your mods" is personal; every other filter combination points search engines at the plain or category listing.
+        if (http.Request.Query["mine"] == "true")
+            return shell.Page("Your mods", PageMeta.Private);
+
+        string? category = http.Request.Query["category"].FirstOrDefault();
+        category = Text.Categories.Contains(category) ? category : null;
+        return shell.Page(seo.BrowseTitle(category), seo.Browse(category));
     }
 
-    private static IResult ModPage(string guid, HttpContext http, Access access, Shell shell, Activity activity, Diagnostics diagnostics)
+    private static IResult ModPage(string guid, HttpContext http, Access access, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
     {
         ModRow? row = access.ResolveMod(guid);
 
@@ -80,16 +96,17 @@ public static class PageEndpoints
             throw ApiException.NotFound("This mod could not be found.");
 
         RecordView(http, activity, diagnostics, row!.Guid);
-        return shell.Page(row.Name);
+        ModListRow full = access.ModWithAuthor(row.Guid)!;
+        return shell.Page(seo.ModTitle(row.Name), seo.Mod(full));
     }
 
-    private static IResult ShieldPage(string value, HttpContext http, Access access, Channels channels, Db db, Shell shell, Activity activity, Diagnostics diagnostics)
+    private static IResult ShieldPage(string value, HttpContext http, Access access, Channels channels, Db db, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
     {
         (ModRow mod, _, _, _) = ToolEndpoints.LookupReport(value, http.Request, access, channels, db);
         http.Response.Headers.CacheControl = "no-store";
         RecordView(http, activity, diagnostics, null);
 
-        return shell.Page("MonkeShield · " + mod.Name);
+        return shell.Page("MonkeShield · " + mod.Name, seo.Shield(access.ModWithAuthor(mod.Guid)!));
     }
 
     private static IResult MyProfile(ForgeContext context)
@@ -97,12 +114,12 @@ public static class PageEndpoints
         return Results.Redirect(context.User?.ProfileUrl ?? "/auth/discord?next=/profile");
     }
 
-    private static IResult ProfilePage(string userId, HttpContext http, Access access, Shell shell, Activity activity, Diagnostics diagnostics)
+    private static IResult ProfilePage(string userId, HttpContext http, Access access, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
     {
         UserRow row = access.ResolveUser(userId) ?? throw ApiException.NotFound("This profile could not be found.");
         RecordView(http, activity, diagnostics, null);
 
-        return shell.Page(row.PublicName);
+        return shell.Page(row.PublicName, seo.Profile(row));
     }
 
     private static IResult BrandFile(string path)

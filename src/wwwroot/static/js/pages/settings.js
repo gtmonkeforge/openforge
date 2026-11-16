@@ -1,9 +1,13 @@
-import { DEFAULT_ACCENT, api, app, applyAccent, auth, avatar, date, esc, icon, readAccent, requireSignIn, setTitle, signInUrl, storeAccent, toast } from '../core.js';
+import { DEFAULT_ACCENT, ago, api, app, applyAccent, auth, avatar, brand, date, esc, icon, money, myGroups, readAccent, requireSignIn, setTitle, signInUrl, storeAccent, toast } from '../core.js';
+import { copy, fill } from '../store-copy.js';
 
 const sections = [
     ['appearance', 'Appearance', 'palette'],
     ['keys', 'Access keys', 'key'],
     ['channels', 'Release channels', 'lock'],
+    ['purchases', copy.purchasesNav, 'tray'],
+    ['payouts', copy.payoutsNav, 'wallet'],
+    ['devices', copy.devicesNav, 'server'],
     ['account', 'Account', 'user'],
 ];
 
@@ -29,6 +33,12 @@ export async function render(section = 'appearance') {
         await keys(body);
     else if (section === 'channels')
         channels(body);
+    else if (section === 'purchases')
+        location.replace(auth.user ? auth.user.profile_url + '#purchases' : '/browse');
+    else if (section === 'payouts')
+        await payouts(body);
+    else if (section === 'devices')
+        await devices(body);
     else
         account(body);
 }
@@ -226,4 +236,89 @@ function account(body) {
         await api('/api/v1/logout', { method: 'POST' });
         location.assign('/browse');
     };
+}
+
+async function payouts(body) {
+    if (!auth.user) {
+        body.innerHTML = requireSignIn(copy.payoutsTitle, fill(copy.payoutsIntro, { brand: brand.name }));
+        return;
+    }
+
+    const params = new URLSearchParams(location.search);
+    const owned = (await myGroups()).filter(g => g.role === 'owner');
+    const accounts = [{ id: auth.user.id, name: auth.user.display_name + ' (you)' }, ...owned.map(g => ({ id: g.id, name: g.name + ' · group' }))];
+    const selected = accounts.find(a => a.id === params.get('account'))?.id || auth.user.id;
+    const query = selected === auth.user.id ? '' : '?account=' + encodeURIComponent(selected);
+    const status = await api('/api/v1/payouts' + query);
+    const values = { brand: brand.name, fee: status.fee_percent };
+    const state = status.charges_enabled ? ['good', copy.payoutsReady] : status.connected ? ['warn', copy.payoutsIncomplete] : ['', copy.payoutsNotConnected];
+    const cur = status.currency;
+    const returned = params.get('onboarding');
+
+    body.innerHTML = `
+        ${returned === 'done' ? `<p class="notice">${esc(copy.payoutsReturned)}</p>` : returned === 'retry' ? `<p class="notice">${esc(copy.payoutsRetry)}</p>` : ''}
+        <section class="surface panel">
+            ${accounts.length > 1 ? `<div class="field"><label for="payout-account">${esc(copy.payoutsFor)}</label><select id="payout-account">${accounts.map(a => `<option value="${esc(a.id)}" ${a.id === selected ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>` : ''}
+            <div class="row"><h2>${esc(copy.payoutsTitle)}</h2><span class="pill ${state[0]}">${esc(state[1])}</span></div>
+            <p class="hint">${esc(fill(copy.payoutsIntro, values))}</p>
+            <p class="hint">${esc(fill(copy.payoutsFees, values))}</p>
+            ${!status.enabled ? `<p class="notice">${esc(copy.storeDisabled)}</p>` : `<div class="row">
+                ${status.charges_enabled ? '' : `<button class="button" id="payout-onboard">${icon('external')}${esc(status.connected ? copy.payoutsContinue : copy.payoutsConnect)}</button>`}
+                ${status.connected ? `<a class="button subtle" href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer">${icon('external')}${esc(copy.payoutsDashboard)}</a>` : ''}
+            </div>`}
+        </section>
+        ${status.connected ? `<div class="stat-strip payout-totals">
+            <div><span>${esc(copy.payoutsSales)}</span><strong>${esc(money(status.totals.sales_cents, cur))}</strong></div>
+            <div><span>${esc(fill(copy.payoutsFeesPaid, values))}</span><strong>${esc(money(status.totals.fees_cents, cur))}</strong></div>
+            <div><span>${esc(copy.payoutsEarnings)}</span><strong>${esc(money(status.totals.earnings_cents, cur))}</strong></div>
+            <div><span>${esc(copy.payoutsDonations)}</span><strong>${esc(money(status.totals.donations_cents, cur))}</strong></div>
+        </div>
+        <section class="surface panel"><h2>${esc(copy.payoutsRecent)}</h2>${status.recent.length ? status.recent.map(r => `
+            <div class="key-item">${icon(r.kind === 'purchase' ? 'tag' : r.kind === 'subscription' ? 'layers' : 'heart')}<div class="grow"><strong>${esc(r.kind === 'purchase' ? copy.kindPurchase : r.kind === 'subscription' ? copy.kindSubscription : copy.kindDonation)}</strong>${r.name ? ' · ' + esc(r.name) : ''}<div class="hint">${esc(ago(r.created_at))}</div></div>
+            <span class="mono">${esc(money(r.amount_cents - r.fee_cents, r.currency))}</span>${r.status !== 'paid' ? `<span class="pill bad">${esc(copy.statuses[r.status] || r.status)}</span>` : ''}</div>`).join('') : `<p class="hint">${esc(copy.payoutsNone)}</p>`}</section>` : ''}`;
+
+    body.querySelector('#payout-account')?.addEventListener('change', event => {
+        location.assign('/settings/payouts' + (event.target.value === auth.user.id ? '' : '?account=' + encodeURIComponent(event.target.value)));
+    });
+    body.querySelector('#payout-onboard')?.addEventListener('click', async event => {
+        event.target.disabled = true;
+
+        try {
+            const { url } = await api('/api/v1/payouts/onboard' + query, { method: 'POST' });
+            location.assign(url);
+        } catch (error) {
+            toast(error.message, 'error');
+            event.target.disabled = false;
+        }
+    });
+}
+
+async function devices(body) {
+    if (!auth.user) {
+        body.innerHTML = requireSignIn(copy.devicesTitle, copy.devicesEmpty);
+        return;
+    }
+
+    const load = async () => {
+        const result = await api('/api/v1/injector/devices');
+
+        body.innerHTML = `<section class="surface panel"><h2>${esc(copy.devicesTitle)}</h2><p class="hint">${esc(fill(copy.devicesIntro, { max: result.max_devices }))}</p>
+            ${result.items.length ? result.items.map(d => `<div class="key-item">${icon('server')}<div class="grow"><strong>${esc(d.name)}</strong>
+                <div class="hint">${esc(d.last_used_at ? fill(copy.devicesLastUsed, { when: ago(d.last_used_at) }) : copy.devicesNeverUsed)}</div></div>
+                <button class="button danger small" data-remove="${esc(d.id)}">${esc(copy.devicesRemove)}</button></div>`).join('') : `<p class="hint">${esc(copy.devicesEmpty)}</p>`}</section>`;
+
+        body.querySelectorAll('[data-remove]').forEach(button => button.onclick = async () => {
+            if (!confirm(copy.devicesRemoveConfirm))
+                return;
+
+            try {
+                await api('/api/v1/injector/devices/' + encodeURIComponent(button.dataset.remove), { method: 'DELETE' });
+                await load();
+            } catch (error) {
+                toast(error.message, 'error');
+            }
+        });
+    };
+
+    await load();
 }

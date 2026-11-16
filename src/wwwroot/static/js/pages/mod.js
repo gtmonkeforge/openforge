@@ -1,4 +1,7 @@
-import { ago, api, canManageMod, app, auth, avatar, bindCopy, capLabels, capTips, date, esc, icon, loaderLabels, modBadges, modIcon, number, setTitle, signInUrl, size, toast, userBadges } from '../core.js';
+import { ago, api, brand, canManageMod, app, auth, avatar, bindCopy, capLabels, capTips, date, esc, icon, loaderLabels, modBadges, modIcon, number, onOutside, setTitle, signInUrl, size, toast, userBadges } from '../core.js';
+import { consumeReturn, money, openDonate, startCheckout } from '../store.js';
+import { copy, fill } from '../store-copy.js';
+import { bindSubscribe, subscribe, tierCard } from '../tiers.js';
 
 export async function render(id) {
     const channelName = new URLSearchParams(location.search).get('channel') || 'stable';
@@ -8,7 +11,7 @@ export async function render(id) {
     const base = '/api/v1/mods/' + encodeURIComponent(mod.guid);
     const shieldUrl = `/view/${encodeURIComponent(mod.guid)}/monkeshield?channel=${encodeURIComponent(mod.channel.name)}`;
 
-    setTitle(mod.name);
+    setTitle(brand.game ? `${mod.name} · ${brand.game} mod` : mod.name);
     document.querySelector('.mod-backdrop')?.remove();
 
     if (mod.banner || mod.logo)
@@ -16,6 +19,11 @@ export async function render(id) {
 
     const capabilities = Object.keys(capLabels).filter(key => mod.capabilities[key]);
     const loaders = mod.loaders?.length ? mod.loaders : ['bepinex5'];
+    const price = money(mod.price_cents, mod.currency);
+    const locked = mod.gated && !mod.owned;
+    const options = purchaseOptions(mod);
+    const tiers = mod.tiers || [];
+    const canDonate = mod.donations_enabled && !owner && mod.status === 'approved';
 
     app.innerHTML = `
         <a class="breadcrumb" href="/browse">${icon('back')}All mods</a>
@@ -30,12 +38,15 @@ export async function render(id) {
                     <span class="pill">${esc(mod.category)}</span>
                     ${mod.channel.name !== 'stable' ? `<span class="pill accent mono">${esc(mod.channel.name)}</span>` : ''}
                     ${mod.visibility !== 'public' ? `<span class="pill">${mod.visibility === 'private' ? 'Private' : 'Code-only'}</span>` : ''}
+                    ${mod.gated ? `<span class="pill accent">${mod.owned && !owner ? esc(copy.owned) : esc(mod.price_cents > 0 ? price : fill(copy.tierFrom, { price: money(mod.min_tier_cents, mod.currency) }))}</span>` : ''}
+                    ${mod.uses_injector ? `<span class="pill" title="${esc(copy.injectorTip)}">${icon('lock')}${esc(copy.injectorPill)}</span>` : ''}
                 </div>
                 ${mod.badges?.length ? `<div class="badges">${modBadges(mod)}</div>` : ''}
             </div>
             <div class="hero-actions">
-                ${current ? `<a class="button large" href="#download" id="hero-download">${icon('download')}Download${loaders.length === 1 ? ' · ' + esc(loaderLabels[loaders[0]]) : ''}</a>` : '<span class="pill">No releases yet</span>'}
+                ${heroAction(mod, current, locked, options)}
                 <div class="row">
+                    ${canDonate ? `<button class="button subtle small" id="donate">${icon('heart')}${esc(copy.donate)}</button>` : ''}
                     ${owner ? `<a class="button subtle small" href="/upload?guid=${encodeURIComponent(mod.guid)}&channel=${encodeURIComponent(mod.channel.name)}">${icon('edit')}Manage</a>` : ''}
                     <button class="button subtle small" data-copy="${esc(location.origin + location.pathname + location.search)}" data-copy-label="Link copied.">${icon('link')}Share</button>
                     ${mod.source_url ? `<a class="button subtle small" href="${esc(mod.source_url)}" target="_blank" rel="noopener noreferrer">${icon('github')}Source</a>` : ''}
@@ -55,6 +66,7 @@ export async function render(id) {
             <div>
                 <div class="tabs" role="tablist" aria-label="Mod sections">
                     <button role="tab" id="tab-overview" aria-controls="panel-overview" data-tab="overview">Overview</button>
+                    ${tiers.length ? `<button role="tab" id="tab-tiers" aria-controls="panel-tiers" data-tab="tiers">${esc(copy.tiersTab)}<span class="count">${tiers.length}</span></button>` : ''}
                     <button role="tab" id="tab-versions" aria-controls="panel-versions" data-tab="versions">Versions<span class="count">${mod.releases.length}</span></button>
                     <button role="tab" id="tab-community" aria-controls="panel-community" data-tab="community">Community<span class="count" id="comment-count"></span></button>
                     <button role="tab" id="tab-security" aria-controls="panel-security" data-tab="security">Security</button>
@@ -64,14 +76,18 @@ export async function render(id) {
                     ${mod.channel.notes ? `<div class="surface panel"><h2>${esc(mod.channel.name)} channel notes</h2><p class="hint">${esc(mod.channel.notes)}</p></div>` : ''}
                     <article class="surface panel"><div class="markdown">${mod.description_html}</div></article>
                 </section>
-                <section class="tab-panel" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" hidden>${versions(mod)}</section>
+                ${tiers.length ? `<section class="tab-panel" role="tabpanel" id="panel-tiers" aria-labelledby="tab-tiers" hidden>
+                    <p class="hint">${esc(copy.tiersIntro)}</p>
+                    <div class="tier-grid">${tiers.map(t => tierCard(t, { canSubscribe: !owner, signInHref: auth.user ? null : signInUrl() })).join('')}</div>
+                </section>` : ''}
+                <section class="tab-panel" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" hidden>${versions(mod, locked)}</section>
                 <section class="tab-panel" role="tabpanel" id="panel-community" aria-labelledby="tab-community" hidden><div class="surface panel" id="community"><p class="hint">Loading…</p></div></section>
                 <section class="tab-panel" role="tabpanel" id="panel-security" aria-labelledby="tab-security" hidden><div class="surface panel" id="security"><p class="hint">Loading analysis…</p></div></section>
             </div>
             <aside class="mod-sidebar" aria-label="Downloads and details">
                 <section class="surface download-card" id="download">
                     <div class="version"><div><span class="hint">Latest${mod.channel.name !== 'stable' ? ' · ' + esc(mod.channel.name) : ''}</span><br><strong>${current ? 'v' + esc(current.version) : 'No release'}</strong></div>${current ? `<span class="hint">${esc(date(current.released_at))}</span>` : ''}</div>
-                    ${current ? downloads(current) : '<p class="hint">Nothing to download in this channel yet.</p>'}
+                    ${!current ? '<p class="hint">Nothing to download in this channel yet.</p>' : locked ? buyCard(options) : mod.uses_injector ? installCard() : downloads(current)}
                     ${mod.channels.length > 1 ? `<div class="field"><label for="channel-switch">Release channel</label><select id="channel-switch">${mod.channels.map(c => `<option value="${esc(c.name)}" ${c.name === mod.channel.name ? 'selected' : ''}>${esc(c.name)}${c.public ? '' : ' · private'}${c.enabled ? '' : ' · disabled'}</option>`).join('')}</select></div>` : ''}
                     ${current?.notes ? `<details class="hint"><summary>What’s new</summary><p class="notes">${esc(current.notes)}</p></details>` : ''}
                 </section>
@@ -103,11 +119,12 @@ export async function render(id) {
         url.searchParams.set('channel', event.target.value);
         location.assign(url.pathname + url.search);
     });
-    app.querySelector('#hero-download')?.addEventListener('click', event => {
-        event.preventDefault();
-        const card = app.querySelector('#download');
-        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
+    app.querySelectorAll('[data-option]').forEach(button => button.onclick = () => choose(mod, button.dataset.option, button));
+    app.querySelectorAll('[data-buy-chosen]').forEach(button => button.onclick = () => choose(mod, button.parentElement.querySelector('select').value, button));
+    bindSubscribe(app);
+    app.querySelector('#donate')?.addEventListener('click', () => openDonate({ recipient: mod.author.id, name: mod.author.name, guid: mod.guid }));
+    consumeReturn(() => awaitPurchase(mod.guid));
+    bindDownloadMenu();
 
     bindCopy(app);
     bindTabs();
@@ -211,19 +228,168 @@ function downloads(release) {
         if (!files.length)
             return '';
 
-        return `<div class="loader-group"><span>${esc(label)}</span>${files.map(f => `<a class="file-link" href="${esc(f.url)}">
+        return `<div class="loader-group"><span>${esc(label)}</span>${files.map(f => `<a class="file-link" href="${esc(f.url)}" rel="nofollow">
             <span class="kind">${esc(f.kind.toUpperCase())}</span>
             <span class="name">${esc(f.filename)}<small>${size(f.size)}</small></span>${icon('download')}</a>`).join('')}</div>`;
     }).join('') + `<details class="hint"><summary>SHA-256 checksums</summary>${release.downloads.map(f => `<p>${esc(f.filename)}<code class="checksum">${esc(f.sha256)}</code></p>`).join('')}</details>`;
 }
 
-function versions(mod) {
+// Everything a buyer can pick for this mod: a one-time purchase, then each monthly tier they don't already have.
+function purchaseOptions(mod) {
+    const options = [];
+
+    if (mod.price_cents > 0) {
+        const price = money(mod.price_cents, mod.currency);
+        options.push({ value: 'once', label: fill(copy.tierOneTime, { price }), button: fill(copy.buy, { price }) });
+    }
+
+    for (const tier of mod.tiers || []) {
+        if (!tier.subscribed)
+            options.push({ value: 'tier:' + tier.id, label: fill(copy.tierOption, { name: tier.name, price: money(tier.price_cents, tier.currency) }), monthly: true });
+    }
+
+    return options;
+}
+
+// A plain button for a one-time-only mod; a tier dropdown with a Buy button whenever monthly tiers exist.
+function chooser(options, large) {
+    if (!options.length)
+        return '';
+
+    if (!auth.user)
+        return `<a class="button ${large ? 'large' : 'block'}" href="${signInUrl()}">${icon('discord')}${esc(copy.buySignInShort)}</a>`;
+
+    if (options.length === 1 && !options[0].monthly)
+        return `<button class="button ${large ? 'large' : 'block'}" data-option="${esc(options[0].value)}">${icon('tag')}${esc(options[0].button)}</button>`;
+
+    return `<div class="buy-chooser ${large ? 'large' : ''}"><select aria-label="${esc(copy.tierChoose)}">${options.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select><button class="button" data-buy-chosen>${icon('tag')}${esc(copy.buyChosen)}</button></div>`;
+}
+
+function choose(mod, value, button) {
+    if (value === 'once')
+        startCheckout(mod.guid, button);
+    else
+        subscribe(value.slice('tier:'.length), button);
+}
+
+function heroAction(mod, current, locked, options) {
+    if (!current)
+        return '<span class="pill">No releases yet</span>';
+
+    if (locked)
+        return chooser(options, true);
+
+    if (mod.uses_injector)
+        return `<a class="button large" href="/software/launchpad">${icon('rocket')}${esc(copy.installTitle)}</a>`;
+
+    const groups = loaderGroups(current);
+    const files = groups.flatMap(g => g.files);
+
+    if (!files.length)
+        return '<span class="pill">No files</span>';
+
+    // A single file needs no choice; link straight to it.
+    if (files.length === 1)
+        return `<a class="button large" href="${esc(files[0].url)}" rel="nofollow">${icon('download')}Download · ${esc(groups[0].label)}</a>`;
+
+    return `<div class="menu-wrap download-menu">
+        <button class="button large" id="hero-download" aria-haspopup="menu" aria-expanded="false">${icon('download')}Download${icon('chevron')}</button>
+        <template id="download-menu-items">${groups.map(g => g.files.length === 1
+            ? `<a role="menuitem" href="${esc(g.files[0].url)}" rel="nofollow">${icon('download')}${esc(g.label)}<span class="meta">${size(g.files[0].size)}</span></a>`
+            : `<div class="label">${esc(g.label)}</div>${g.files.map(f => `<a role="menuitem" href="${esc(f.url)}" rel="nofollow">${icon('download')}${esc(f.filename)}<span class="meta">${size(f.size)}</span></a>`).join('')}`).join('')}</template>
+    </div>`;
+}
+
+// The current release's files, grouped by loader in the site's standard loader order.
+function loaderGroups(release) {
+    return Object.entries(loaderLabels)
+        .map(([loader, label]) => ({ loader, label, files: release.downloads.filter(f => f.url && (f.loader || 'bepinex5') === loader) }))
+        .filter(g => g.files.length);
+}
+
+function bindDownloadMenu() {
+    const button = app.querySelector('#hero-download');
+
+    if (!button)
+        return;
+
+    const wrap = button.parentElement;
+    const items = wrap.querySelector('#download-menu-items');
+    let stop = () => {};
+
+    const close = () => {
+        wrap.querySelector('.dropdown')?.remove();
+        button.setAttribute('aria-expanded', 'false');
+        stop();
+    };
+
+    button.onclick = () => {
+        if (wrap.querySelector('.dropdown'))
+            return close();
+
+        const menu = document.createElement('div');
+        menu.className = 'dropdown';
+        menu.setAttribute('role', 'menu');
+        menu.append(items.content.cloneNode(true));
+        wrap.append(menu);
+        button.setAttribute('aria-expanded', 'true');
+        menu.querySelector('a')?.focus();
+        stop = onOutside(wrap, close);
+
+        menu.addEventListener('click', event => {
+            if (event.target.closest('a'))
+                close();
+        });
+        menu.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                close();
+                button.focus();
+            }
+        });
+    };
+}
+
+function buyCard(options) {
+    const monthly = options.some(o => o.monthly);
+    return `<div class="store-card"><strong>${esc(monthly ? copy.lockedCardTitle : copy.buyCardTitle)}</strong><p class="hint">${esc(monthly ? copy.lockedCardText : copy.buyCardText)}</p>${chooser(options, false)}</div>`;
+}
+
+function installCard() {
+    return `<div class="store-card"><strong>${icon('lock')} ${esc(copy.installTitle)}</strong><p class="hint">${esc(copy.installText)}</p>
+        <a class="button block" href="/software/launchpad">${icon('rocket')}${esc(copy.installButton)}</a></div>`;
+}
+
+// Stripe confirms payment by webhook, which can land a few seconds after the buyer is sent back.
+async function awaitPurchase(guid) {
+    toast(copy.purchaseThanks);
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        try {
+            const latest = await api('/api/v1/mods/' + encodeURIComponent(guid));
+
+            if (latest.owned) {
+                toast(copy.purchaseReady);
+                location.reload();
+                return;
+            }
+        } catch {
+        }
+    }
+
+    toast(copy.purchaseStillProcessing);
+}
+
+function versions(mod, locked) {
     if (!mod.releases.length)
         return '<div class="empty"><h2>No releases yet</h2><p>Releases published to this channel will appear here.</p></div>';
 
     return `<div class="timeline">${mod.releases.map(r => `<article class="surface release">
         <header><strong>v${esc(r.version)}</strong>${r.version === mod.current_version ? '<span class="pill good">Latest</span>' : ''}${(r.loaders || []).map(l => `<span class="pill">${esc(loaderLabels[l])}</span>`).join('')}<time datetime="${esc(r.released_at)}">${esc(date(r.released_at))}</time></header>
-        ${r.downloads.map(f => `<a class="file-link" href="${esc(f.url)}"><span class="kind">${esc(f.kind.toUpperCase())}</span><span class="name">${esc(f.filename)}<small>${esc(loaderLabels[f.loader] || f.loader)} · ${size(f.size)}</small></span>${icon('download')}</a>`).join('')}
+        ${r.downloads.map(f => f.url && !locked
+            ? `<a class="file-link" href="${esc(f.url)}" rel="nofollow"><span class="kind">${esc(f.kind.toUpperCase())}</span><span class="name">${esc(f.filename)}<small>${esc(loaderLabels[f.loader] || f.loader)} · ${size(f.size)}</small></span>${icon('download')}</a>`
+            : `<div class="file-link disabled"><span class="kind">${esc(f.kind.toUpperCase())}</span><span class="name">${esc(f.filename)}<small>${esc(loaderLabels[f.loader] || f.loader)} · ${f.url ? size(f.size) : esc(copy.installFileHidden)}</small></span>${icon('lock')}</div>`).join('')}
         ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}
     </article>`).join('')}</div>`;
 }

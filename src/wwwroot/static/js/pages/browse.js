@@ -1,7 +1,6 @@
-import { api, app, auth, capLabels, capTips, categories, categoryIcons, emptyState, esc, icon, loaderLabels, modCard, pagination, setTitle, skeletonGrid } from '../core.js';
+import { api, app, auth, brand, capLabels, capTips, categories, categoryIcons, emptyState, esc, icon, loaderLabels, modCard, pagination, setTitle, skeletonGrid } from '../core.js';
 
 export async function render() {
-    setTitle('Browse');
     const params = new URLSearchParams(location.search);
     const state = {
         q: params.get('q') || '',
@@ -9,6 +8,7 @@ export async function render() {
         capability: params.get('capability') || '',
         loader: params.get('loader') || '',
         type: params.get('type') || '',
+        price: params.get('price') || '',
         sort: params.get('sort') || 'newest',
         mine: params.get('mine') === 'true',
         page: Number(params.get('page')) || 1,
@@ -24,6 +24,11 @@ export async function render() {
                 <div class="filter-group"><h2 class="filter-title">Capabilities</h2>
                     ${Object.entries(capLabels).map(([key, label]) => `<label class="check" title="${esc(capTips[key])}"><input type="radio" name="capability" value="${key}">${label}</label>`).join('')}
                     <label class="check"><input type="radio" name="capability" value="">Any</label>
+                </div>
+                <div class="filter-group"><h2 class="filter-title">Price</h2>
+                    <label class="check"><input type="radio" name="price" value="">Any price</label>
+                    <label class="check"><input type="radio" name="price" value="free">Free</label>
+                    <label class="check"><input type="radio" name="price" value="paid">Paid</label>
                 </div>
                 <div class="filter-group"><label class="filter-title" for="loader-filter">Mod loader</label><select id="loader-filter"><option value="">All loaders</option>${Object.entries(loaderLabels).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>
                 <div class="filter-group"><label class="filter-title" for="type-filter">Format</label><select id="type-filter"><option value="">Any format</option><option value="dll">DLL</option><option value="zip">ZIP</option></select></div>
@@ -60,8 +65,19 @@ export async function render() {
         mine.checked = state.mine;
 
     app.querySelector(`[name=capability][value="${state.capability}"]`).checked = true;
+    (app.querySelector(`[name=price][value="${state.price}"]`) || app.querySelector('[name=price][value=""]')).checked = true;
+
+    // Matches the server's titles so search engines see the same one before and after the script runs.
+    function title() {
+        if (state.mine)
+            return 'Your mods';
+
+        const mods = brand.game ? `${brand.game} mods` : 'Mods';
+        return state.category ? `${state.category} ${brand.game ? mods : 'mods'}` : mods;
+    }
 
     function sync() {
+        setTitle(title());
         app.querySelectorAll('[data-category]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.category === state.category)));
         const chips = [];
 
@@ -80,9 +96,18 @@ export async function render() {
         if (state.type)
             chips.push(['type', state.type.toUpperCase()]);
 
+        if (state.price)
+            chips.push(['price', state.price === 'free' ? 'Free' : 'Paid']);
+
         app.querySelector('#active-filters').innerHTML = chips.map(([key, label]) => `<button class="pill accent" data-clear="${key}">${esc(label)} ${icon('x')}</button>`).join('');
         app.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => {
             state[b.dataset.clear] = '';
+
+            if (b.dataset.clear === 'price')
+                app.querySelector('[name=price][value=""]').checked = true;
+
+            if (b.dataset.clear === 'capability')
+                app.querySelector('[name=capability][value=""]').checked = true;
 
             if (b.dataset.clear === 'q') {
                 document.querySelector('#header-q').value = '';
@@ -98,7 +123,7 @@ export async function render() {
         sync();
         const query = new URLSearchParams({ sort: state.sort, page: String(state.page), limit: '12' });
 
-        for (const key of ['q', 'category', 'capability', 'loader', 'type'])
+        for (const key of ['q', 'category', 'capability', 'loader', 'type', 'price'])
             if (state[key])
                 query.set(key, state[key]);
 
@@ -114,7 +139,7 @@ export async function render() {
                 return;
 
             app.querySelector('#result-count').innerHTML = `<strong>${data.total}</strong> ${data.total === 1 ? 'mod' : 'mods'}`;
-            const filtered = state.q || state.category || state.capability || state.loader || state.type || state.mine;
+            const filtered = state.q || state.category || state.capability || state.loader || state.type || state.price || state.mine;
             results.innerHTML = data.items.length
                 ? `<div class="mod-grid">${data.items.map(modCard).join('')}</div>`
                 : emptyState(filtered ? 'No mods match' : 'No mods yet', filtered ? 'Try a different search or clear a filter.' : 'No mods have been published yet.', '<a class="button subtle" href="/upload">Publish a mod</a>');
@@ -142,6 +167,10 @@ export async function render() {
         state.capability = r.value;
         reload();
     });
+    app.querySelectorAll('[name=price]').forEach(r => r.onchange = () => {
+        state.price = r.value;
+        reload();
+    });
     sort.onchange = () => { state.sort = sort.value; reload(); };
     loader.onchange = () => { state.loader = loader.value; reload(); };
     type.onchange = () => { state.type = type.value; reload(); };
@@ -150,11 +179,12 @@ export async function render() {
         mine.onchange = () => { state.mine = mine.checked; reload(); };
 
     app.querySelector('#reset-filters').onclick = () => {
-        Object.assign(state, { q: '', category: '', capability: '', loader: '', type: '', sort: 'newest', mine: false });
+        Object.assign(state, { q: '', category: '', capability: '', loader: '', type: '', price: '', sort: 'newest', mine: false });
         sort.value = 'newest';
         loader.value = '';
         type.value = '';
         app.querySelector('[name=capability][value=""]').checked = true;
+        app.querySelector('[name=price][value=""]').checked = true;
 
         if (mine)
             mine.checked = false;

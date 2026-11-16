@@ -23,12 +23,14 @@ public sealed class Storage
     private readonly ForgeOptions _options;
     private readonly Db _db;
     private readonly ILogger<Storage> _logger;
+    private readonly PayloadVault _vault;
 
-    public Storage(ForgeOptions options, Db db, ILogger<Storage> logger)
+    public Storage(ForgeOptions options, Db db, ILogger<Storage> logger, PayloadVault vault)
     {
         _options = options;
         _db = db;
         _logger = logger;
+        _vault = vault;
     }
 
     public string FilePath(string storedName)
@@ -119,7 +121,8 @@ public sealed class Storage
         return rotated;
     }
 
-    public async Task<StoredDownload> SaveDownloadAsync(IFormFile file, List<string> written)
+    // Sealed downloads are injector mod binaries: encrypted before they touch the disk and never served as downloads.
+    public async Task<StoredDownload> SaveDownloadAsync(IFormFile file, List<string> written, bool seal = false)
     {
         string name = Text.SecureFilename(file.FileName);
         string kind = name.Split('.').Last().ToLowerInvariant();
@@ -137,13 +140,27 @@ public sealed class Storage
         else
             ValidateZip(raw);
 
+        if (seal && kind != "dll")
+            throw ApiException.BadRequest("Injector mods must be uploaded as a single DLL per mod loader.");
+
         string id = Text.Hex(16);
-        string stored = id + "." + kind;
+        string stored = id + "." + kind + (seal ? PayloadVault.SealedSuffix : "");
         string path = FilePath(stored);
-        await File.WriteAllBytesAsync(path, raw);
+        string sha256 = Convert.ToHexStringLower(SHA256.HashData(raw));
+
+        try
+        {
+            await File.WriteAllBytesAsync(path, seal ? _vault.Seal(raw, stored) : raw);
+        }
+        finally
+        {
+            if (seal)
+                CryptographicOperations.ZeroMemory(raw);
+        }
+
         written.Add(path);
 
-        return new StoredDownload(id, stored, name, raw.Length, Convert.ToHexStringLower(SHA256.HashData(raw)), kind);
+        return new StoredDownload(id, stored, name, raw.Length, sha256, kind);
     }
 
     public static void DeleteAll(IEnumerable<string> paths)

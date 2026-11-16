@@ -108,6 +108,7 @@ function openforge() {
         ['TRUST_COUNTRY_HEADER, COUNTRY_HEADER', 'Read each visitor’s country from your proxy, for download stats. Defaults to Cloudflare’s CF-IPCountry.'],
         ['APP_DOWNLOADS_DIR, CLI_DIR', 'Folders served at /app and /cli.'],
         ['BRAND_NAME, BRAND_DESCRIPTION', 'Your site’s name, and the description search engines show.'],
+        ['BRAND_GAME', 'The game your mods are for, used in page titles. Leave empty to omit it.'],
         ['BRAND_LOGO, BRAND_FAVICON', 'Image files for your logo and browser icon. The icon uses the logo if it isn’t set.'],
         ['BRAND_TINT_LOGO', 'Color the logo with each user’s accent color. On by default only for the built-in logo.'],
     ];

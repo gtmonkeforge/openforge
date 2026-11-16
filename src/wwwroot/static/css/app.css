@@ -227,6 +227,9 @@ input[type=file]::file-selector-button { margin-right: 10px; padding: 6px 10px; 
 .author-chip:hover { text-decoration: underline; }
 .hero-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 190px; }
 .hero-actions .row { justify-content: flex-end; }
+.download-menu > .button { width: 100%; }
+.download-menu > .button .icon:last-child { width: 16px; height: 16px; margin-left: 2px; }
+.download-menu .dropdown { min-width: 100%; width: max-content; max-width: min(320px, calc(100vw - 32px)); }
 .stat-strip { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0 0 24px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .stat-strip > div { display: flex; align-items: baseline; gap: 8px; }
 .stat-strip span { color: var(--muted); font-size: 13px; }
@@ -290,6 +293,10 @@ input[type=file]::file-selector-button { margin-right: 10px; padding: 6px 10px; 
 .link-list a { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-size: 14px; }
 .link-list a:hover { background: var(--surface-2); }
 .link-list .icon { width: 16px; height: 16px; color: var(--muted); }
+/* Server-rendered lists shown until a page's script takes over, and to crawlers that don't run scripts. */
+.prerender-list { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
+.prerender-list a { font-weight: 600; }
+.prerender-list .hint { display: block; }
 .link-list a .icon:last-child { margin-left: auto; color: var(--faint); }
 .release { padding: 16px 18px; }
 .release + .release { margin-top: 10px; }
@@ -502,6 +509,7 @@ table.data tr:last-child td { border-bottom: 0; }
     .mod-hero { grid-template-columns: auto minmax(0, 1fr); }
     .hero-actions { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
     .hero-actions .row { justify-content: flex-start; }
+    .download-menu .dropdown { right: auto; left: 0; }
     .stat-cards { grid-template-columns: 1fr 1fr; }
     .analytics-grid { grid-template-columns: 1fr; }
 }
@@ -566,3 +574,46 @@ table.data tr:last-child td { border-bottom: 0; }
 .about-dialog a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 
 .brand-image .brand-mark, .brand-image .footer-inner .brand-mark { background: url("/brand/logo") center / contain no-repeat; mask: none; -webkit-mask: none; }
+
+/* Store: buying, donations and injector installs */
+.file-link.disabled { opacity: .7; }
+.file-link.disabled:hover { border-color: var(--line); }
+.store-card { display: grid; gap: 8px; }
+.store-card .hint { margin: 0 0 4px; }
+.store-card .icon { width: 15px; height: 15px; vertical-align: -2px; }
+.card-foot .price { color: var(--text); font-weight: 600; }
+.footer-link { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.footer-link:hover { color: var(--text); }
+.donate-amounts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 16px; padding: 0; border: 0; }
+.donate-amounts legend { margin-bottom: 8px; }
+.donate-amount { position: relative; }
+.donate-amount input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.donate-amount span { display: grid; place-items: center; min-height: 40px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface-2); font: 600 14px var(--mono); }
+.donate-amount input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.donate-amount input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 480px) { .donate-amounts { grid-template-columns: repeat(2, 1fr); } }
+.payout-totals { margin: 14px 0; }
+
+/* Tiers, memberships and disputes */
+.tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.tier-card { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
+.tier-card header { display: grid; gap: 4px; justify-items: start; }
+.tier-card h3 { margin: 0; font-size: 16px; }
+.tier-price { font: 600 18px var(--mono); }
+.tier-benefits { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
+.tier-benefits li { display: flex; gap: 8px; align-items: flex-start; }
+.tier-benefits .icon { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: var(--accent); }
+.tier-card > .button, .tier-card > .pill { margin-top: auto; }
+.tier-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tier-mods { display: grid; gap: 6px; padding: 0; border: 0; }
+.tier-admin-list { margin-bottom: 12px; }
+.buy-chooser { display: flex; gap: 8px; width: 100%; }
+.buy-chooser select { flex: 1; min-width: 0; }
+.buy-chooser.large { min-width: 280px; }
+.buy-chooser.large select, .buy-chooser.large .button { min-height: 44px; }
+.subhead { margin: 18px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.dispute-reason { margin: 10px 0; padding: 10px 12px; border-left: 3px solid var(--line-strong); background: var(--surface-2); border-radius: 6px; white-space: pre-wrap; font-size: 14px; }
+.dispute .row .grow { flex: 1; }
+@media (max-width: 640px) { .buy-chooser, .buy-chooser.large { min-width: 0; flex-wrap: wrap; } }
+.store-card .buy-chooser { flex-direction: column; }
+#purchases { margin-top: 24px; }

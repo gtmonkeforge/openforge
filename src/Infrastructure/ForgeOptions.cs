@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 
 namespace OpenForge.Infrastructure;
@@ -24,14 +26,25 @@ public sealed class ForgeOptions
     public string CliDir { get; set; } = "";
     public string BrandName { get; set; } = "MonkeForge";
     public string BrandDescription { get; set; } = "MonkeForge is an open Gorilla Tag plugin marketplace.";
+
+    // The game this instance hosts mods for, used in page titles and search descriptions. Empty leaves it out.
+    public string BrandGame { get; set; } = "Gorilla Tag";
     public string? BrandLogo { get; set; }
     public string? BrandFavicon { get; set; }
     public bool BrandTintLogo { get; set; } = true;
+    public string StripeSecretKey { get; set; } = "";
+    public List<string> StripeWebhookSecrets { get; set; } = [];
+    public string Currency { get; set; } = "usd";
+    public string? PayloadKey { get; set; }
+
+    // MonkeForge's share of paid mod sales. Donations never carry a platform fee.
+    public const int PlatformFeePercent = 10;
 
     public string FilesDir => Path.Combine(DataDir, "files");
     public string RegistryPath => Path.Combine(DataDir, "registry.sqlite3");
     public string DiagnosticsPath => Path.Combine(DataDir, "diagnostics.sqlite3");
     public bool OAuthConfigured => DiscordClientId != "" && DiscordClientSecret != "";
+    public bool StripeConfigured => StripeSecretKey != "" && StripeWebhookSecrets.Count > 0;
 
     public static ForgeOptions Load(IConfiguration config, string contentRoot)
     {
@@ -66,11 +79,26 @@ public sealed class ForgeOptions
 
         options.BrandName = NonEmpty(Get("Brand:Name", "BRAND_NAME")) ?? options.BrandName;
         options.BrandDescription = NonEmpty(Get("Brand:Description", "BRAND_DESCRIPTION")) ?? options.BrandDescription;
+        options.BrandGame = (Get("Brand:Game", "BRAND_GAME") ?? options.BrandGame).Trim();
         options.BrandLogo = BrandImage(contentRoot, Get("Brand:Logo", "BRAND_LOGO"), "logo");
         options.BrandFavicon = BrandImage(contentRoot, Get("Brand:Favicon", "BRAND_FAVICON"), "favicon");
 
         // The built-in logo is a white silhouette tinted with the accent color, while custom logos are shown as drawn unless asked otherwise.
         options.BrandTintLogo = Flag("Brand:TintLogo", "BRAND_TINT_LOGO", options.BrandLogo == null);
+
+        options.StripeSecretKey = (Get("Stripe:SecretKey", "STRIPE_SECRET_KEY") ?? "").Trim();
+
+        // The platform endpoint and the Connect endpoint each have their own signing secret, so both are accepted.
+        options.StripeWebhookSecrets = new[] { Get("Stripe:WebhookSecret", "STRIPE_WEBHOOK_SECRET"), Get("Stripe:ConnectWebhookSecret", "STRIPE_CONNECT_WEBHOOK_SECRET") }
+            .Select(NonEmpty).OfType<string>().ToList();
+
+        string currency = (NonEmpty(Get("Stripe:Currency", "STRIPE_CURRENCY")) ?? "usd").ToLowerInvariant();
+
+        if (currency.Length != 3 || !currency.All(char.IsAsciiLetterLower))
+            throw new InvalidOperationException("STRIPE_CURRENCY must be a three-letter ISO currency code such as usd.");
+
+        options.Currency = currency;
+        options.PayloadKey = NonEmpty(Get("PayloadKey", "PAYLOAD_KEY"));
 
         string? shield = Get("MonkeShieldUrl", "MONKESHIELD_URL");
 

@@ -1,3 +1,5 @@
+import { copy as storeCopy } from './store-copy.js';
+
 export const app = document.querySelector('#app');
 export const boot = JSON.parse(document.querySelector('#boot')?.textContent || '{}');
 export const brand = boot.brand || { name: 'MonkeForge', tint_favicon: true };
@@ -63,6 +65,8 @@ const paths = {
     bolt: '<path d="M13 3 5 13.5h6L10 21l8-10.5h-6Z"/>',
     database: '<ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/>',
     discord: '<path d="M8.5 7.5a13 13 0 0 1 7 0M8 17c-2 1-4 0-4 0-.5-4 .5-8 2.5-10.5L8.5 6M16 17c2 1 4 0 4 0 .5-4-.5-8-2.5-10.5L15.5 6M7.5 15.5c3 1.5 6 1.5 9 0"/><circle cx="9.5" cy="12" r="1"/><circle cx="14.5" cy="12" r="1"/>',
+    tag: '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8a1.4 1.4 0 0 1 0 2l-7 7a1.4 1.4 0 0 1-2 0Z"/><circle cx="8" cy="8" r="1.4"/>',
+    wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3"/><rect x="4" y="8" width="16.5" height="11" rx="2.5"/><path d="M16 13.5h.01"/>',
     tray: '<path d="M3 13h5l1.5 2.5h5L16 13h5M5 5h14l2 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z"/>',
 };
 
@@ -103,6 +107,14 @@ export function toast(message, kind = '') {
 
 export function setTitle(title) {
     document.title = title ? `${title} · ${brand.name}` : brand.name;
+}
+
+// Zero-decimal currencies such as JPY are already in whole units; everything else is in cents.
+export const zeroDecimal = new Set(['bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf']);
+
+export function money(minor, currency = 'usd') {
+    const units = zeroDecimal.has(currency) ? minor : minor / 100;
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency.toUpperCase() }).format(units);
 }
 
 export const number = n => Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n || 0);
@@ -180,7 +192,7 @@ export function modCard(mod) {
         <div class="by">by ${esc(mod.author.name)} ${userBadges(mod.author)}</div>
         ${mod.badges?.length ? `<div class="badges">${modBadges(mod)}</div>` : ''}
         <p class="summary">${esc(plainText(mod.description))}</p>
-        <div class="card-foot"><span>${icon('download')}${number(mod.downloads)}</span><span>${icon('clock')}${esc(ago(mod.updated_at))}</span><span class="spacer"></span><span>v${esc(mod.current_version || '—')}</span></div>
+        <div class="card-foot"><span>${icon('download')}${number(mod.downloads)}</span><span>${icon('clock')}${esc(ago(mod.updated_at))}</span><span class="spacer"></span>${mod.gated ? `<span class="price">${esc(mod.owned && mod.author.id !== auth.user?.id ? storeCopy.cardOwned : mod.price_cents > 0 ? money(mod.price_cents, mod.currency) : storeCopy.tierFrom.replace('{price}', money(mod.min_tier_cents, mod.currency)))}</span>` : ''}<span>v${esc(mod.current_version || '—')}</span></div>
     </a>`;
 }
 

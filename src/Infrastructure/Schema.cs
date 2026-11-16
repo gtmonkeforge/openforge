@@ -134,6 +134,127 @@ public static class Schema
         db.Execute("CREATE TABLE IF NOT EXISTS discord_publications(release_id INTEGER PRIMARY KEY REFERENCES releases(id) ON DELETE CASCADE)");
         if (!webhookTableExists)
             db.Execute("INSERT INTO discord_publications SELECT r.id FROM releases r JOIN mods m ON m.guid=r.guid WHERE m.status='approved'");
+
+        MigrateStore(db);
+    }
+
+    private static void MigrateStore(SqliteConnection db)
+    {
+        HashSet<string> userColumns = Columns(db, "users");
+
+        foreach (var (name, definition) in new[]
+        {
+            ("stripe_account_id", "TEXT"), ("stripe_charges_enabled", "INTEGER NOT NULL DEFAULT 0"),
+            ("stripe_transfers_enabled", "INTEGER NOT NULL DEFAULT 0"), ("stripe_details_submitted", "INTEGER NOT NULL DEFAULT 0"),
+        })
+        {
+            if (!userColumns.Contains(name))
+                db.Execute($"ALTER TABLE users ADD COLUMN {name} {definition}");
+        }
+
+        HashSet<string> modColumns = Columns(db, "mods");
+
+        if (!modColumns.Contains("price_cents"))
+            db.Execute("ALTER TABLE mods ADD COLUMN price_cents INTEGER NOT NULL DEFAULT 0");
+
+        if (!modColumns.Contains("uses_injector"))
+            db.Execute("ALTER TABLE mods ADD COLUMN uses_injector INTEGER NOT NULL DEFAULT 0");
+
+        // Payment and entitlement rows deliberately have no foreign keys to mods: financial records must outlive a deleted listing.
+        db.Execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS user_stripe_account ON users(stripe_account_id) WHERE stripe_account_id IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS payments(
+                id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('purchase','creator_donation','platform_donation')),
+                buyer_id TEXT REFERENCES users(id), recipient_id TEXT, guid TEXT,
+                amount_cents INTEGER NOT NULL, fee_cents INTEGER NOT NULL, currency TEXT NOT NULL,
+                stripe_account TEXT, payment_intent TEXT, status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS payments_intent ON payments(payment_intent);
+            CREATE INDEX IF NOT EXISTS payments_recipient ON payments(recipient_id,status);
+            CREATE INDEX IF NOT EXISTS payments_buyer ON payments(buyer_id,created_at);
+            CREATE TABLE IF NOT EXISTS entitlements(
+                user_id TEXT NOT NULL REFERENCES users(id), guid TEXT NOT NULL, payment_id TEXT REFERENCES payments(id),
+                granted_at TEXT NOT NULL, revoked_at TEXT, PRIMARY KEY(user_id,guid));
+            CREATE TABLE IF NOT EXISTS stripe_events(id TEXT PRIMARY KEY, type TEXT NOT NULL, received_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS injector_devices(
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
+                public_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
+            CREATE INDEX IF NOT EXISTS injector_devices_user ON injector_devices(user_id);
+            CREATE TABLE IF NOT EXISTS injector_challenges(
+                nonce_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS injector_deliveries(
+                id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT NOT NULL, guid TEXT NOT NULL,
+                file_id TEXT NOT NULL, version TEXT NOT NULL, ip_hash TEXT NOT NULL, created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS injector_deliveries_user ON injector_deliveries(user_id,created);
+            """);
+
+        MigrateSubscriptions(db);
+    }
+
+    private static void MigrateSubscriptions(SqliteConnection db)
+    {
+        // The payments kind CHECK predates subscriptions, and SQLite can't alter a CHECK, so the table is rebuilt once.
+        string? paymentsSql = db.ExecuteScalar<string?>("SELECT sql FROM sqlite_master WHERE type='table' AND name='payments'");
+
+        if (paymentsSql != null && !paymentsSql.Contains("'subscription'"))
+        {
+            db.Execute("PRAGMA foreign_keys=OFF");
+
+            try
+            {
+                using SqliteTransaction transaction = db.BeginTransaction(deferred: false);
+                db.Execute("""
+                    CREATE TABLE payments_new(
+                        id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('purchase','subscription','creator_donation','platform_donation')),
+                        buyer_id TEXT REFERENCES users(id), recipient_id TEXT, guid TEXT,
+                        amount_cents INTEGER NOT NULL, fee_cents INTEGER NOT NULL, currency TEXT NOT NULL,
+                        stripe_account TEXT, payment_intent TEXT, status TEXT NOT NULL DEFAULT 'open',
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, subscription_id TEXT);
+                    INSERT INTO payments_new(id,kind,buyer_id,recipient_id,guid,amount_cents,fee_cents,currency,stripe_account,payment_intent,status,created_at,updated_at)
+                        SELECT id,kind,buyer_id,recipient_id,guid,amount_cents,fee_cents,currency,stripe_account,payment_intent,status,created_at,updated_at FROM payments;
+                    DROP TABLE payments;
+                    ALTER TABLE payments_new RENAME TO payments;
+                    CREATE INDEX IF NOT EXISTS payments_intent ON payments(payment_intent);
+                    CREATE INDEX IF NOT EXISTS payments_recipient ON payments(recipient_id,status);
+                    CREATE INDEX IF NOT EXISTS payments_buyer ON payments(buyer_id,created_at);
+                    """, transaction: transaction);
+                transaction.Commit();
+            }
+            finally
+            {
+                db.Execute("PRAGMA foreign_keys=ON");
+            }
+        }
+
+        // A tier with a guid belongs to that mod. A tier without one is a creator membership that unlocks the mods listed in tier_mods.
+        db.Execute("""
+            CREATE INDEX IF NOT EXISTS payments_subscription ON payments(subscription_id);
+            CREATE TABLE IF NOT EXISTS subscription_tiers(
+                id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), guid TEXT,
+                name TEXT NOT NULL, benefits TEXT NOT NULL DEFAULT '[]', price_cents INTEGER NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, archived_at TEXT);
+            CREATE INDEX IF NOT EXISTS tiers_owner ON subscription_tiers(owner_id);
+            CREATE INDEX IF NOT EXISTS tiers_mod ON subscription_tiers(guid);
+            CREATE TABLE IF NOT EXISTS tier_mods(
+                tier_id TEXT NOT NULL REFERENCES subscription_tiers(id), guid TEXT NOT NULL, PRIMARY KEY(tier_id,guid));
+            CREATE INDEX IF NOT EXISTS tier_mods_guid ON tier_mods(guid);
+            CREATE TABLE IF NOT EXISTS subscriptions(
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), tier_id TEXT NOT NULL REFERENCES subscription_tiers(id),
+                owner_id TEXT NOT NULL, stripe_account TEXT NOT NULL, checkout_session TEXT UNIQUE, stripe_subscription TEXT UNIQUE,
+                price_cents INTEGER NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                cancel_at_period_end INTEGER NOT NULL DEFAULT 0, current_period_end TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id,status);
+            CREATE INDEX IF NOT EXISTS subscriptions_tier ON subscriptions(tier_id,status);
+            CREATE TABLE IF NOT EXISTS staff_disputes(
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), payment_id TEXT, subscription_id TEXT,
+                seller_id TEXT, guid TEXT, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open'
+                CHECK(status IN ('open','accepted','rejected')), staff_id TEXT, staff_note TEXT,
+                refunded_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, resolved_at TEXT);
+            CREATE UNIQUE INDEX IF NOT EXISTS open_payment_dispute ON staff_disputes(payment_id) WHERE status='open' AND payment_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS open_subscription_dispute ON staff_disputes(subscription_id) WHERE status='open' AND subscription_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS disputes_status ON staff_disputes(status,created_at);
+            """);
     }
 
     private static void MigrateChannels(SqliteConnection db)

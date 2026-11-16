@@ -45,12 +45,14 @@ public sealed class MonkeShield
     private readonly ForgeOptions _options;
     private readonly IHttpClientFactory _http;
     private readonly ILogger<MonkeShield> _logger;
+    private readonly PayloadVault _vault;
 
-    public MonkeShield(ForgeOptions options, IHttpClientFactory http, ILogger<MonkeShield> logger)
+    public MonkeShield(ForgeOptions options, IHttpClientFactory http, ILogger<MonkeShield> logger, PayloadVault vault)
     {
         _options = options;
         _http = http;
         _logger = logger;
+        _vault = vault;
     }
 
     public static JsonObject ReadReport(string? raw)
@@ -175,8 +177,9 @@ public sealed class MonkeShield
                     WHERE r.guid=@guid AND r.id=(SELECT MAX(r2.id) FROM releases r2 WHERE r2.guid=r.guid AND r2.channel=r.channel)
                     """, new { guid }).ToList();
 
+                // Injector mods are usually obfuscated, which hides exactly what static analysis looks for, so a person always approves them.
                 if (latestReports.Count > 0 && latestReports.All(r => ReadReport(r)["eligible"]?.GetValueKind() == JsonValueKind.True))
-                    db.Exec("UPDATE mods SET status='approved' WHERE guid=@guid AND status='pending'", new { guid });
+                    db.Exec("UPDATE mods SET status='approved' WHERE guid=@guid AND status='pending' AND uses_injector=0", new { guid });
             }
 
             db.Commit();
@@ -314,11 +317,22 @@ public sealed class MonkeShield
             {
                 if (file.Kind == "dll")
                 {
-                    await ScanAsync(await File.ReadAllBytesAsync(file.Path), file.Name);
+                    // Sealed injector binaries are opened in memory only for the scan.
+                    byte[] assembly = _vault.ReadStored(file.Path);
+
+                    try
+                    {
+                        await ScanAsync(assembly, file.Name);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(assembly);
+                    }
+
                     continue;
                 }
 
-                using ZipArchive archive = ZipFile.OpenRead(file.Path);
+                using ZipArchive archive = new ZipArchive(new MemoryStream(_vault.ReadStored(file.Path)), ZipArchiveMode.Read);
                 int assemblies = 0;
 
                 foreach (ZipArchiveEntry entry in archive.Entries)
@@ -354,7 +368,7 @@ public sealed class MonkeShield
             result["status"] = "incomplete";
             diagnostics.Add(ex.Message);
         }
-        catch (Exception ex) when (ex is IOException or HttpRequestException or TaskCanceledException or JsonException or ScannerException)
+        catch (Exception ex) when (ex is IOException or HttpRequestException or TaskCanceledException or JsonException or ScannerException or CryptographicException)
         {
             // Keep transport errors generic so internal service URLs and paths are not exposed.
             result["status"] = "incomplete";

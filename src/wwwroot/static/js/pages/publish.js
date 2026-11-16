@@ -1,4 +1,7 @@
 import { api, app, auth, brand, myGroups, capLabels, capTips, categories, esc, icon, initials, loaderLabels, modBadges, requireSignIn, setTitle, size, toast } from '../core.js';
+import { fromMinor, storeConfig, toMinor } from '../store.js';
+import { copy, fill } from '../store-copy.js';
+import { tierManager } from '../tiers.js';
 
 const guidPattern = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){2,}$/;
 const versionPattern = /^[0-9][a-zA-Z0-9.+_-]{0,63}$/;
@@ -57,6 +60,7 @@ export async function render() {
                             ${mod ? '' : '<div class="field"><label for="visibility">Visibility</label><select id="visibility"><option value="public">Public · reviewed</option><option value="private">Private · only you</option><option value="code">Requires a channel code</option></select></div>'}
                         </div>
                         <div class="field"><label for="source">Source code <span>optional</span></label><input id="source" type="url" maxlength="2000" placeholder="https://github.com/you/your-mod" value="${esc(mod?.source_url || '')}"></div>
+                        ${mod ? '' : `<div class="field"><label class="check"><input type="checkbox" id="uses-injector">${esc(copy.injectorCheck)}</label><p class="hint">${esc(copy.injectorHint)}</p></div>`}
                     </div>
                     <div class="row sticky-actions"><span class="hint">Step 1 of 3</span><span class="spacer"></span><button type="button" class="button" data-go="1">Continue${icon('next')}</button></div>
                 </section>
@@ -430,8 +434,10 @@ async function publish(mod, form) {
     data.set('notes', form.querySelector('#notes').value);
     data.set('links', JSON.stringify(readLinks(form)));
 
-    if (!mod)
+    if (!mod) {
         data.set('visibility', value('visibility'));
+        data.set('uses_injector', form.querySelector('#uses-injector')?.checked ? 'true' : 'false');
+    }
 
     if (!mod && app.querySelector('#author'))
         data.set('author_id', value('author'));
@@ -538,6 +544,8 @@ async function manage(mod, canTransfer) {
                     <p class="hint">Public mods are reviewed. Private and code-only mods don’t need approval.</p>
                     <button class="button subtle" id="save-visibility">Save visibility</button>
                 </section>
+                <section class="surface panel" id="pricing-panel"><h2>${icon('tag')} ${esc(copy.pricingTitle)}</h2><p class="hint">Loading…</p></section>
+                <section class="surface panel" id="tiers-panel" hidden></section>
                 <section class="surface panel" ${canTransfer ? '' : 'hidden'}>
                     <h2>${icon('swap')} Transfer ownership</h2>
                     <p class="hint">Send this mod to another publisher or a publishing group. They must accept unless you own the destination.</p>
@@ -612,6 +620,8 @@ async function manage(mod, canTransfer) {
         }
     };
 
+    pricing(mod, root.querySelector('#pricing-panel'));
+
     root.querySelector('#transfer-form').onsubmit = async event => {
         event.preventDefault();
 
@@ -621,6 +631,74 @@ async function manage(mod, canTransfer) {
         try {
             const result = await api(base + '/transfer', { method: 'POST', json: { target_id: root.querySelector('#transfer-target').value } });
             toast(result.status === 'accepted' ? 'Ownership transferred.' : 'Transfer requested. Waiting for the recipient.');
+        } catch (error) {
+            toast(error.message, 'error');
+        }
+    };
+}
+
+async function pricing(mod, panel) {
+    const config = await storeConfig();
+    const personal = mod.author.id === auth.user.id;
+    const payouts = config.enabled ? await api('/api/v1/payouts' + (personal ? '' : '?account=' + encodeURIComponent(mod.author.id))).catch(() => null) : null;
+    const canSell = !!payouts?.charges_enabled;
+    const payoutsUrl = '/settings/payouts' + (personal ? '' : '?account=' + encodeURIComponent(mod.author.id));
+    const title = `<h2>${icon('tag')} ${esc(copy.pricingTitle)}</h2>`;
+    const tiersPanel = app.querySelector('#tiers-panel');
+
+    // Tier changes are re-read from the server so the list always matches what buyers see.
+    const showTiers = async () => {
+        const latest = await api('/api/v1/mods/' + encodeURIComponent(mod.guid));
+        tiersPanel.hidden = false;
+        await tierManager(tiersPanel, { guid: mod.guid, tiers: (latest.tiers || []).filter(t => t.scope === 'mod'), canSell, payoutsUrl, reload: showTiers });
+    };
+
+    if (config.enabled && mod.visibility === 'public')
+        showTiers().catch(error => toast(error.message, 'error'));
+
+    if (!config.enabled) {
+        panel.innerHTML = `${title}<p class="hint">${esc(copy.storeDisabled)}</p>`;
+        return;
+    }
+
+    panel.innerHTML = `${title}
+        <div class="field"><label for="price">${esc(copy.pricingPrice)} <span>${esc(config.currency.toUpperCase())}</span></label>
+            <input id="price" inputmode="decimal" value="${esc(fromMinor(mod.price_cents || 0, config.currency))}" ${canSell || mod.price_cents ? '' : 'disabled'}>
+            <p class="hint">${esc(copy.pricingFreeHint)} ${esc(fill(copy.pricingFee, { brand: brand.name, fee: config.fee_percent }))}</p></div>
+        ${canSell ? '' : `<p class="notice">${esc(copy.pricingNeedsPayouts)} <a href="${esc(payoutsUrl)}">${esc(copy.pricingSetupPayouts)}</a></p>`}
+        ${mod.uses_injector
+            ? `<p class="hint">${icon('lock')} ${esc(copy.pricingInjectorOn)}</p>`
+            : `<div class="field"><label class="check"><input type="checkbox" id="pricing-injector">${esc(copy.injectorCheck)}</label><p class="hint">${esc(copy.injectorHint)}</p></div>`}
+        <button class="button subtle" id="save-pricing">${esc(copy.pricingSave)}</button>`;
+
+    panel.querySelector('#save-pricing').onclick = async () => {
+        const payload = {};
+        const price = toMinor(panel.querySelector('#price').value || '0', config.currency);
+        const injector = panel.querySelector('#pricing-injector');
+
+        if (!Number.isInteger(price))
+            return toast(copy.pricingInvalid, 'error');
+
+        if (price !== (mod.price_cents || 0))
+            payload.price_cents = price;
+
+        if (injector?.checked) {
+            if (!confirm(copy.pricingInjectorConfirm))
+                return;
+
+            payload.uses_injector = true;
+        }
+
+        if (!Object.keys(payload).length)
+            return toast(copy.pricingSaved);
+
+        try {
+            const result = await api('/api/v1/mods/' + encodeURIComponent(mod.guid) + '/pricing', { method: 'PUT', json: payload });
+            toast(payload.uses_injector && result.status === 'pending' ? copy.pricingInjectorPending : copy.pricingSaved);
+            mod.price_cents = result.price_cents;
+
+            if (payload.uses_injector)
+                location.reload();
         } catch (error) {
             toast(error.message, 'error');
         }
