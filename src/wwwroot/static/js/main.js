@@ -9,6 +9,7 @@ const routes = [
     [/^\/profile\/([^/]+)$/, () => import('./pages/profile.js')],
     [/^\/settings(?:\/([a-z]+))?$/, () => import('./pages/settings.js')],
     [/^\/admin$/, () => import('./pages/admin.js')],
+    [/^\/(login|signup|verify-email|reset-password|unsubscribe)$/, () => import('./pages/auth.js')],
     [/^\/(friends|chat|groups|transfers|notifications)$/, () => import('./pages/social.js')],
     [/^\/software(?:\/([a-z]+))?$/, () => import('./pages/software.js')],
     [/^\/(terms|privacy)$/, () => import('./pages/legal.js')],

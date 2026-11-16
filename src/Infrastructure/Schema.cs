@@ -136,6 +136,50 @@ public static class Schema
             db.Execute("INSERT INTO discord_publications SELECT r.id FROM releases r JOIN mods m ON m.guid=r.guid WHERE m.status='approved'");
 
         MigrateStore(db);
+        MigrateAccounts(db);
+    }
+
+    private static void MigrateAccounts(SqliteConnection db)
+    {
+        HashSet<string> userColumns = Columns(db, "users");
+
+        // email_source is "discord" when Discord supplied the address, so a later Discord sign-in may refresh it, or "user" when typed in.
+        foreach (var (name, definition) in new[]
+        {
+            ("email", "TEXT"), ("email_verified", "INTEGER NOT NULL DEFAULT 0"), ("email_source", "TEXT"),
+            ("password_hash", "TEXT"), ("session_epoch", "INTEGER NOT NULL DEFAULT 0"),
+            ("email_release_notices", "INTEGER NOT NULL DEFAULT 1"), ("email_announcements", "INTEGER NOT NULL DEFAULT 1"),
+            ("created_at", "TEXT"),
+        })
+        {
+            if (!userColumns.Contains(name))
+                db.Execute($"ALTER TABLE users ADD COLUMN {name} {definition}");
+        }
+
+        // Only email accounts sign in with their address, so only they must have a unique one. Discord accounts keep whatever Discord says.
+        db.Execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS user_login_email ON users(email) WHERE substr(id,1,3)='mf_';
+            CREATE TABLE IF NOT EXISTS email_tokens(
+                token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                purpose TEXT NOT NULL CHECK(purpose IN ('verify','reset','change')), email TEXT NOT NULL,
+                created REAL NOT NULL, expires REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS email_tokens_user ON email_tokens(user_id,purpose);
+            CREATE TABLE IF NOT EXISTS passkeys(
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL,
+                public_key BLOB NOT NULL, algorithm INTEGER NOT NULL, sign_count INTEGER NOT NULL DEFAULT 0,
+                transports TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, last_used_at TEXT);
+            CREATE INDEX IF NOT EXISTS passkeys_user ON passkeys(user_id);
+            CREATE TABLE IF NOT EXISTS email_broadcasts(
+                id TEXT PRIMARY KEY, author_id TEXT NOT NULL REFERENCES users(id), subject TEXT NOT NULL, body TEXT NOT NULL,
+                include_opted_out INTEGER NOT NULL DEFAULT 0, recipients INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS email_outbox(
+                id INTEGER PRIMARY KEY, user_id TEXT, to_address TEXT NOT NULL, subject TEXT NOT NULL,
+                text_body TEXT NOT NULL, html_body TEXT NOT NULL, kind TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 1,
+                broadcast_id TEXT, list_unsubscribe TEXT, status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','sent','failed')),
+                attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL, created REAL NOT NULL, sent REAL, error TEXT);
+            CREATE INDEX IF NOT EXISTS email_outbox_queue ON email_outbox(status,priority,next_attempt);
+            CREATE INDEX IF NOT EXISTS email_outbox_broadcast ON email_outbox(broadcast_id,status);
+            """);
     }
 
     private static void MigrateStore(SqliteConnection db)

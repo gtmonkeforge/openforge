@@ -16,9 +16,11 @@ public sealed partial class Webhooks
     private readonly ForgeOptions _options;
     private readonly IHttpClientFactory _http;
     private readonly ILogger<Webhooks> _logger;
+    private readonly Diagnostics _diagnostics;
 
-    public Webhooks(Db db, ForgeOptions options, IHttpClientFactory http, ILogger<Webhooks> logger)
+    public Webhooks(Db db, ForgeOptions options, IHttpClientFactory http, ILogger<Webhooks> logger, Diagnostics diagnostics)
     {
+        _diagnostics = diagnostics;
         _db = db;
         _options = options;
         _http = http;
@@ -68,10 +70,11 @@ public sealed partial class Webhooks
                 }
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The exception text can contain the secret webhook URL, so it is not logged.
+            // The exception text can contain the secret webhook URL, so only its type is logged or saved.
             _logger.LogWarning("Discord webhook delivery failed for mod {Guid}; notification was not retried.", guid);
+            _diagnostics.Report("Discord webhook", $"Delivery failed for mod {guid} ({ex.GetType().Name}); the notification was not retried.");
         }
     }
 

@@ -11,7 +11,7 @@ export async function render() {
     setTitle('Publish');
 
     if (!auth.user) {
-        app.innerHTML = requireSignIn('Publish a mod', 'Create your page and ship releases. Your Discord account is your author profile.');
+        app.innerHTML = requireSignIn('Publish a mod', 'Create your page and ship releases. Your account is your author profile.');
         return;
     }
 

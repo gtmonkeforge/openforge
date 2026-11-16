@@ -335,6 +335,9 @@ public static class StoreEndpoints
             new("client_reference_id", buyer),
             // Stripe's minimum is 30 minutes after it creates the session, so exactly 30 from here lands just short of it.
             new("expires_at", DateTimeOffset.UtcNow.AddMinutes(35).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture)),
+            // Newer Stripe accounts turn on Managed Payments by default, which rejects line items without a product tax code.
+            // OpenForge sells through Connect as the platform, not with Stripe as merchant of record, so it opts out per session.
+            new("managed_payments[enabled]", "false"),
         };
 
         // Metadata goes on the session and on the PaymentIntent, so refund and dispute events carry it too.
@@ -388,6 +391,7 @@ public static class StoreEndpoints
         List<KeyValuePair<string, string>> form = CheckoutForm(options, row.Name, amount, page + "?checkout=success", page + "?checkout=cancelled", user.Id,
             new() { ["kind"] = "purchase", ["guid"] = row.Guid, ["buyer"] = user.Id });
         form.Add(new("payment_intent_data[application_fee_amount]", fee.ToString(CultureInfo.InvariantCulture)));
+        StripeClient.AddBranding(form, options, seller!.PublicName);
 
         JsonObject session = await stripe.PostAsync("/v1/checkout/sessions", form, seller!.StripeAccountId);
         RecordCheckout(db, session, "purchase", user.Id, seller.Id, row.Guid, amount, fee, options.Currency, seller.StripeAccountId);
@@ -417,6 +421,7 @@ public static class StoreEndpoints
         {
             List<KeyValuePair<string, string>> form = CheckoutForm(options, "Donation to " + options.BrandName, amount, back + separator + "donation=success", back + separator + "donation=cancelled", user.Id,
                 new() { ["kind"] = "platform_donation", ["buyer"] = user.Id });
+            StripeClient.AddBranding(form, options);
 
             JsonObject session = await stripe.PostAsync("/v1/checkout/sessions", form);
             RecordCheckout(db, session, "platform_donation", user.Id, null, null, amount, 0, options.Currency, null);
@@ -440,6 +445,7 @@ public static class StoreEndpoints
 
         // Destination charge with no application fee: the full amount reaches the creator and MonkeForge covers Stripe's fee.
         donation.Add(new("payment_intent_data[transfer_data][destination]", creator.StripeAccountId!));
+        StripeClient.AddBranding(donation, options);
 
         JsonObject created = await stripe.PostAsync("/v1/checkout/sessions", donation);
         RecordCheckout(db, created, "creator_donation", user.Id, creator.Id, guid, amount, 0, options.Currency, null);
@@ -478,7 +484,7 @@ public static class StoreEndpoints
         });
     }
 
-    private static async Task<IResult> WebhookAsync(HttpRequest request, Db db, Payments payments, Subscriptions subscriptions, StripeClient stripe, ILoggerFactory loggers)
+    private static async Task<IResult> WebhookAsync(HttpRequest request, Db db, Payments payments, Subscriptions subscriptions, StripeClient stripe, ILoggerFactory loggers, Diagnostics diagnostics)
     {
         stripe.RequireConfigured();
         ILogger logger = loggers.CreateLogger("StripeWebhook");
@@ -556,6 +562,8 @@ public static class StoreEndpoints
                 if (!consistent)
                 {
                     logger.LogError("Stripe session {Session} does not match its recorded payment; access was not granted", payment.Id);
+                    diagnostics.Report("Stripe webhook", $"Checkout session {payment.Id} does not match its recorded payment, so access was not granted.",
+                        $"Expected account {payment.StripeAccount ?? "platform"}, {payment.AmountCents} {payment.Currency}.\nGot account {account ?? "platform"}, {StripeClient.Long(obj["amount_total"])} {StripeClient.Str(obj["currency"])}.");
                     break;
                 }
 
@@ -622,6 +630,7 @@ public static class StoreEndpoints
             catch (ApiException)
             {
                 logger.LogError("Could not cancel disputed subscription {Subscription}; cancel it in Stripe", disputed.Id);
+                diagnostics.Report("Stripe webhook", $"Could not cancel disputed subscription {disputed.Id}. Cancel it in the Stripe dashboard.");
             }
         }
 

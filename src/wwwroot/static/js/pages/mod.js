@@ -98,7 +98,7 @@ export async function render(id) {
                         <div><dt>GUID</dt><dd><button class="copy-inline" data-copy="${esc(mod.guid)}" data-copy-label="GUID copied.">${esc(mod.guid)}${icon('copy')}</button></dd></div>
                         ${mod.id !== mod.guid ? `<div><dt>Custom ID</dt><dd class="mono">${esc(mod.id)}</dd></div>` : ''}
                         <div><dt>Loaders</dt><dd>${loaders.map(l => esc(loaderLabels[l])).join(', ')}</dd></div>
-                        <div><dt>Discord</dt><dd class="mono">@${esc(mod.author.discord_username)}</dd></div>
+                        ${mod.author.discord_username ? `<div><dt>Discord</dt><dd class="mono">@${esc(mod.author.discord_username)}</dd></div>` : ''}
                         <div><dt>Published</dt><dd>${esc(date(mod.created_at))}</dd></div>
                         ${capabilities.length ? `<div><dt>Capabilities</dt><dd class="capabilities">${capabilities.map(key => `<span class="pill accent" title="${esc(capTips[key])}">${capLabels[key]}</span>`).join('')}</dd></div>` : ''}
                     </dl>
@@ -257,7 +257,7 @@ function chooser(options, large) {
         return '';
 
     if (!auth.user)
-        return `<a class="button ${large ? 'large' : 'block'}" href="${signInUrl()}">${icon('discord')}${esc(copy.buySignInShort)}</a>`;
+        return `<a class="button ${large ? 'large' : 'block'}" href="${signInUrl()}">${icon('user')}${esc(copy.buySignInShort)}</a>`;
 
     if (options.length === 1 && !options[0].monthly)
         return `<button class="button ${large ? 'large' : 'block'}" data-option="${esc(options[0].value)}">${icon('tag')}${esc(options[0].button)}</button>`;
@@ -452,7 +452,7 @@ async function community(mod, base) {
         <div id="rating-controls"></div>
         <div class="section-title"><h2>Comments</h2></div>
         ${auth.user && open ? `<form id="comment-form" class="stack"><label class="sr-only" for="comment-body">Write a comment</label><textarea id="comment-body" required maxlength="3000" rows="3" placeholder="Share feedback, tips or bug reports…"></textarea><div class="row"><span class="spacer"></span><button class="button" type="submit">${icon('chat')}Post comment</button></div></form>`
-            : `<p class="hint">${open ? `<a href="${signInUrl()}">Sign in with Discord</a> to rate and comment.` : 'Ratings and comments open after approval.'}</p>`}
+            : `<p class="hint">${open ? `<a href="${signInUrl()}">Sign in</a> to rate and comment.` : 'Ratings and comments open after approval.'}</p>`}
         <div id="comments"></div>
         <div id="comment-pages"></div>`;
 

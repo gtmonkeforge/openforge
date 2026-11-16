@@ -6,7 +6,7 @@ export async function render(view) {
     setTitle(titles[view]);
 
     if (!auth.user) {
-        app.innerHTML = requireSignIn(titles[view], 'Sign in with Discord to use friends, chat and publishing groups.');
+        app.innerHTML = requireSignIn(titles[view], 'Sign in to use friends, chat and publishing groups.');
         return;
     }
 
@@ -210,7 +210,7 @@ async function transfers(root) {
     const data = await api('/api/v1/mod-transfers');
 
     root.innerHTML = data.items.length ? `<div class="stack">${data.items.map(t => `<section class="surface panel row">
-        ${icon('swap')}<div class="grow"><strong><a href="/view/${encodeURIComponent(t.guid)}">${esc(t.name)}</a></strong><div class="hint">${esc(t.source_name)} → ${esc(t.target_name)} · ${esc(ago(t.created))}</div></div>
+        ${icon('swap')}<div class="grow"><strong><a href="/view/${encodeURIComponent(t.guid)}">${esc(t.name)}</a></strong><div class="hint">${esc(t.source_name)} -> ${esc(t.target_name)} · ${esc(ago(t.created))}</div></div>
         <span class="spacer"></span>
         ${t.incoming ? `<button class="button small" data-action="accept" data-id="${esc(t.id)}">Accept</button><button class="button ghost small" data-action="decline" data-id="${esc(t.id)}">Decline</button>` : ''}
         ${t.outgoing ? `<button class="button ghost small" data-action="cancel" data-id="${esc(t.id)}">Cancel</button>` : ''}

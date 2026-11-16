@@ -58,7 +58,7 @@ export async function openDonate({ recipient, name, guid }) {
             <div class="field"><label for="donate-custom">${esc(copy.donateCustom)}</label><input id="donate-custom" inputmode="decimal" placeholder="${esc(fromMinor(config.min_donation_cents, config.currency))}"></div>
             <p class="error" id="donate-error" role="alert" hidden></p>
             <div class="row"><span class="spacer"></span><button type="button" class="button ghost" value="cancel" id="donate-cancel">Cancel</button><button class="button" type="submit">${esc(copy.donateSubmit)}</button></div>
-        </form>` : `<div class="row"><span class="spacer"></span><a class="button discord" href="${signInUrl()}">${esc(copy.donateSignIn)}</a></div>`}`;
+        </form>` : `<div class="row"><span class="spacer"></span><a class="button" href="${signInUrl()}">${esc(copy.donateSignIn)}</a></div>`}`;
 
     dialog.addEventListener('close', () => dialog.remove());
     dialog.addEventListener('click', event => {

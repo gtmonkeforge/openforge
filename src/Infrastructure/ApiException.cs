@@ -48,6 +48,7 @@ public sealed class ApiException : Exception
             405 => "The method is not allowed for the requested URL.",
             409 => "A conflict happened while processing the request. The resource might have been modified while the request was being processed.",
             413 => "The data value transmitted exceeds the capacity limit.",
+            429 => "Too many requests. Wait a moment and try again.",
             _ => "The request could not be completed.",
         };
     }

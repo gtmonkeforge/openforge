@@ -25,7 +25,7 @@ public static class ToolEndpoints
     private static CurrentUser KeyOwner(ForgeContext context)
     {
         if (context.Session.UserId == null || context.User == null)
-            throw ApiException.Unauthorized("Sign in with Discord to manage API keys.");
+            throw ApiException.Unauthorized("Sign in to manage API keys.");
 
         return context.User;
     }

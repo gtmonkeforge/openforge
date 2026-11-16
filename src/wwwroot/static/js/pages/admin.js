@@ -1,4 +1,4 @@
-import { api, app, applyWidths, auth, categories, date, esc, icon, modIcon, money, number, pagination, setTitle, showError, toast, userBadges } from '../core.js';
+import { api, app, applyWidths, auth, brand, categories, date, esc, icon, modIcon, money, number, pagination, setTitle, showError, toast, userBadges } from '../core.js';
 
 export async function render() {
     if (!auth.user?.is_admin) {
@@ -7,7 +7,7 @@ export async function render() {
     }
 
     setTitle('Admin');
-    const tabs = ['Mods', 'Disputes', 'Users', 'Analytics', 'Errors', ...(auth.user.is_root ? ['Admins'] : [])];
+    const tabs = ['Mods', 'Disputes', 'Users', 'Email', 'Analytics', 'Errors', ...(auth.user.is_root ? ['Admins'] : [])];
     let active = new URLSearchParams(location.search).get('tab') || 'Mods';
 
     if (!tabs.includes(active))
@@ -37,6 +37,8 @@ export async function render() {
                 await analytics(body, alive);
             else if (tab === 'Errors')
                 await errors(body);
+            else if (tab === 'Email')
+                await email(body, alive);
             else
                 await users(body, tab === 'Admins', alive);
         } catch (error) {
@@ -156,7 +158,7 @@ async function notes(body, guid) {
 }
 
 async function users(body, admins, alive) {
-    body.innerHTML = `${admins ? '<form class="surface panel row" id="grant"><label for="grant-id">Grant admin to Discord user ID</label><input id="grant-id" class="mono-input" required inputmode="numeric" pattern="[0-9]+" placeholder="User ID"><button class="button">Add admin</button></form><div class="gap"></div>' : ''}
+    body.innerHTML = `${admins ? '<form class="surface panel row" id="grant"><label for="grant-id">Grant admin to user ID</label><input id="grant-id" class="mono-input" required pattern="[0-9]+|mf_[0-9a-f]+" placeholder="Discord ID or mf_…"><button class="button">Add admin</button></form><div class="gap"></div>' : ''}
         <div class="toolbar"><input id="user-search" type="search" placeholder="Search username, display name or ID" aria-label="Search users"><span class="count" id="user-count"></span></div>
         <div class="table-wrap surface"><table class="data"><thead><tr><th>User</th><th>Mods</th><th>Status</th><th>Actions</th></tr></thead><tbody id="user-rows"></tbody></table></div><div id="user-pages"></div>`;
     let page = 1;
@@ -341,8 +343,8 @@ async function analytics(body, alive) {
 
 async function errors(body) {
     const data = await api('/api/v1/admin/errors');
-    body.innerHTML = data.items.length ? data.items.map(e => `<details class="surface error-log"><summary class="row"><code>${esc(e.id)}</code><strong>${esc(e.exception_type)}</strong><span class="hint mono">${esc(e.method)} ${esc(e.path)}</span><span class="spacer"></span><span class="hint">${esc(date(e.created_at))}</span></summary><p>${esc(e.message)}</p><pre>${esc(e.traceback)}</pre></details>`).join('<div class="gap"></div>')
-        : '<div class="empty"><h2>No errors recorded</h2><p>The last 50 unexpected server errors appear here.</p></div>';
+    body.innerHTML = data.items.length ? data.items.map(e => `<details class="surface error-log"><summary class="row"><code>${esc(e.id)}</code><strong>${esc(e.exception_type)}</strong><span class="hint mono">${esc(e.method)} ${esc(e.path)}</span><span class="spacer"></span><span class="hint">${esc(date(e.created_at))}</span></summary><p>${esc(e.message)}</p>${e.traceback ? `<pre>${esc(e.traceback)}</pre>` : ''}</details>`).join('<div class="gap"></div>')
+        : '<div class="empty"><h2>No errors recorded</h2><p>The last 100 server errors appear here, including failed Stripe and Discord requests.</p></div>';
 }
 
 async function disputes(body, alive) {
@@ -388,4 +390,108 @@ async function disputes(body, alive) {
 
     body.querySelector('#dispute-status').onchange = load;
     await load();
+}
+
+async function email(body, alive) {
+    const data = await api('/api/v1/admin/email');
+
+    if (!alive())
+        return;
+
+    const progress = b => {
+        const done = b.sent + b.failed;
+        return `<div class="bar"><i data-width="${b.recipients ? (done / b.recipients * 100).toFixed(1) : 100}"></i></div>
+            <div class="hint">${number(b.sent)} sent${b.queued ? ` · ${number(b.queued)} queued` : ''}${b.failed ? ` · <span class="error-text">${number(b.failed)} failed</span>` : ''} of ${number(b.recipients)}</div>`;
+    };
+
+    body.innerHTML = `
+        ${data.configured ? '' : '<p class="notice">Email isn’t configured on this server. Set SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD and MAIL_FROM in the server’s .env, then restart.</p>'}
+        <div class="analytics-grid email-admin">
+            <section class="surface panel">
+                <h2>Send an announcement</h2>
+                <p class="hint">Goes to every user with a confirmed email address, Discord accounts included${data.from ? `, from <span class="mono">${esc(data.from)}</span>` : ''}. Each email has an unsubscribe link. Sending is paced at ${number(data.per_minute)} a minute.</p>
+                <form class="stack" id="broadcast-form">
+                    <div class="field"><label for="b-subject">Subject</label><input id="b-subject" required maxlength="150" placeholder="What’s new on ${esc(brand.name)}"></div>
+                    <div class="field"><label for="b-body">Message<span>Markdown: **bold**, [links](https://…), lists</span></label><textarea id="b-body" required maxlength="20000" rows="10"></textarea></div>
+                    ${auth.user.is_root ? '<label class="check"><input type="checkbox" id="b-everyone">Include people who unsubscribed from announcements (legal or security notices only)</label>' : ''}
+                    <div class="row">
+                        <button type="button" class="button ghost" id="b-preview">${icon('eye')}Preview</button>
+                        <button type="button" class="button subtle" id="b-test" ${data.configured ? '' : 'disabled'}>Send a test email</button>
+                        <span class="spacer"></span>
+                        <button type="submit" class="button" id="b-send" ${data.configured ? '' : 'disabled'}>${icon('bell')}<span id="b-count">Send to ${number(data.audience.subscribed)}</span></button>
+                    </div>
+                </form>
+                <div class="email-preview surface" id="b-rendered" hidden></div>
+            </section>
+            <section class="surface panel">
+                <div class="row"><h2>Sent announcements</h2><span class="spacer"></span><button class="button ghost small" id="b-refresh">Refresh</button></div>
+                ${data.broadcasts.length ? data.broadcasts.map(b => `<details class="broadcast">
+                    <summary><strong>${esc(b.subject)}</strong><div class="hint">${esc(date(b.created_at))} · by ${esc(b.author.name)}${b.include_opted_out ? ' · <span class="pill warn">ignored opt-outs</span>' : ''}</div>${progress(b)}</summary>
+                    <pre class="broadcast-body">${esc(b.body)}</pre>
+                </details>`).join('') : '<p class="hint">Nothing sent yet.</p>'}
+            </section>
+        </div>`;
+
+    applyWidths(body);
+    const form = body.querySelector('#broadcast-form');
+    const subject = form.querySelector('#b-subject');
+    const message = form.querySelector('#b-body');
+    const everyone = form.querySelector('#b-everyone');
+    const count = () => everyone?.checked ? data.audience.everyone : data.audience.subscribed;
+    const payload = () => ({ subject: subject.value.trim(), body: message.value, include_opted_out: !!everyone?.checked });
+
+    everyone?.addEventListener('change', () => body.querySelector('#b-count').textContent = `Send to ${number(count())}`);
+    body.querySelector('#b-refresh').onclick = () => email(body, alive);
+
+    body.querySelector('#b-preview').onclick = async () => {
+        const rendered = body.querySelector('#b-rendered');
+
+        try {
+            const { html } = await api('/api/v1/markdown-preview', { method: 'POST', json: { text: message.value } });
+            rendered.innerHTML = `<p class="hint">Subject: <strong>${esc(subject.value)}</strong></p><div class="markdown">${html}</div>`;
+            rendered.hidden = false;
+        } catch (error) {
+            toast(error.message, 'error');
+        }
+    };
+
+    let lastTest = '';
+
+    body.querySelector('#b-test').onclick = async () => {
+        if (!form.reportValidity())
+            return;
+
+        const to = prompt('Send a test of this email to:', lastTest);
+
+        if (!to?.trim())
+            return;
+
+        lastTest = to.trim();
+
+        try {
+            const result = await api('/api/v1/admin/email/test', { method: 'POST', json: { ...payload(), to: lastTest } });
+            toast(`Test sent to ${result.to}.`);
+        } catch (error) {
+            toast(error.message, 'error');
+        }
+    };
+
+    form.onsubmit = async event => {
+        event.preventDefault();
+
+        if (!confirm(`Email “${subject.value.trim()}” to ${count()} people? This can’t be undone.`))
+            return;
+
+        const button = body.querySelector('#b-send');
+        button.disabled = true;
+
+        try {
+            const result = await api('/api/v1/admin/email/broadcasts', { method: 'POST', json: payload() });
+            toast(`Queued for ${result.recipients} people.`);
+            await email(body, alive);
+        } catch (error) {
+            toast(error.message, 'error');
+            button.disabled = false;
+        }
+    };
 }

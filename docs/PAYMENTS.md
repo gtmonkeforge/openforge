@@ -13,6 +13,16 @@ OpenForge sells mods and takes donations through Stripe Connect. Creators connec
 
 Creator accounts are created with `controller.stripe_dashboard.type=full`, `fees.payer=account` and `losses.payments=stripe`. Creators get their own full Stripe dashboard and handle refunds and disputes on their own sales. Because MonkeForge is the merchant for creator donations, MonkeForge is liable for disputes on those.
 
+## Checkout branding
+
+Paid mods and memberships are charged on the creator's account, so Stripe Checkout would normally show the creator's own Stripe branding. OpenForge overrides it on every Checkout Session with `branding_settings`: the site's name, its accent colour on the buttons and, if available, its logo. A line under the pay button tells the buyer which creator they're paying, because Stripe still shows the creator's business name in its terms and on the card statement.
+
+Stripe can't display SVG, so set `STRIPE_BRAND_LOGO_URL` to a PNG or JPEG for the logo. If you set a PNG or JPEG `BRAND_LOGO`, it's used automatically. Without either, checkout shows the name only.
+
+## Receipts
+
+Every paid purchase, membership invoice and donation sends the buyer a receipt from the site's email address, and so does every full refund. Receipts go to the buyer's confirmed address and are always sent, whatever their email preferences. Email has to be configured; see the SMTP settings in [SIGN_IN.md](SIGN_IN.md). If you don't want buyers to also get Stripe's own receipts, turn them off under **Settings → Customer emails** in Stripe. For paid mods and memberships, that setting lives on each creator's account.
+
 ## Configuration
 
 Put these in `.env` or the server environment:
@@ -23,6 +33,7 @@ STRIPE_WEBHOOK_SECRET=whsec_...            # signing secret of the "Your account
 STRIPE_CONNECT_WEBHOOK_SECRET=whsec_...    # signing secret of the "Connected accounts" endpoint
 STRIPE_CURRENCY=usd                        # optional, defaults to usd
 PAYLOAD_KEY=<32 random bytes, base64>      # optional, see below
+STRIPE_BRAND_LOGO_URL=https://.../logo.png # optional, PNG or JPEG shown at the top of Checkout
 ```
 
 Payments stay switched off, and the site says so, until the secret key and at least one webhook secret are set.

@@ -37,6 +37,20 @@ public sealed class ForgeOptions
     public string Currency { get; set; } = "usd";
     public string? PayloadKey { get; set; }
 
+    // A PNG or JPEG for the top of Stripe Checkout. Stripe can't show the SVG logo, so without this checkout shows the brand name only.
+    public string? StripeBrandLogoUrl { get; set; }
+    public string SmtpHost { get; set; } = "";
+    public int SmtpPort { get; set; } = 465;
+
+    // "ssl" connects with TLS from the start (port 465); "starttls" upgrades a plain connection (port 587).
+    public string SmtpSecurity { get; set; } = "ssl";
+    public string SmtpUsername { get; set; } = "";
+    public string SmtpPassword { get; set; } = "";
+    public string MailFrom { get; set; } = "";
+    public string MailFromName { get; set; } = "";
+    public int MailPerMinute { get; set; } = 120;
+    public bool EmailSignup { get; set; } = true;
+
     // MonkeForge's share of paid mod sales. Donations never carry a platform fee.
     public const int PlatformFeePercent = 10;
 
@@ -44,6 +58,8 @@ public sealed class ForgeOptions
     public string RegistryPath => Path.Combine(DataDir, "registry.sqlite3");
     public string DiagnosticsPath => Path.Combine(DataDir, "diagnostics.sqlite3");
     public bool OAuthConfigured => DiscordClientId != "" && DiscordClientSecret != "";
+    public bool MailConfigured => SmtpHost != "" && MailFrom != "";
+    public bool EmailSignupEnabled => EmailSignup && MailConfigured;
     public bool StripeConfigured => StripeSecretKey != "" && StripeWebhookSecrets.Count > 0;
 
     public static ForgeOptions Load(IConfiguration config, string contentRoot)
@@ -99,6 +115,35 @@ public sealed class ForgeOptions
 
         options.Currency = currency;
         options.PayloadKey = NonEmpty(Get("PayloadKey", "PAYLOAD_KEY"));
+        options.StripeBrandLogoUrl = NonEmpty(Get("Stripe:BrandLogoUrl", "STRIPE_BRAND_LOGO_URL"));
+
+        if (options.StripeBrandLogoUrl != null && !Text.IsWebUrl(options.StripeBrandLogoUrl))
+            throw new InvalidOperationException("STRIPE_BRAND_LOGO_URL must be a full http or https URL to a PNG or JPEG image.");
+
+        // A custom PNG or JPEG brand logo is served at /brand/logo, which Stripe can show directly.
+        if (options.StripeBrandLogoUrl == null && options.BrandLogo != null && Path.GetExtension(options.BrandLogo).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg")
+            options.StripeBrandLogoUrl = options.PublicUrl + "/brand/logo";
+
+        options.SmtpHost = (Get("Mail:SmtpHost", "SMTP_HOST") ?? "").Trim();
+        options.SmtpUsername = (Get("Mail:SmtpUsername", "SMTP_USERNAME") ?? "").Trim();
+        options.SmtpPassword = Get("Mail:SmtpPassword", "SMTP_PASSWORD") ?? "";
+        options.SmtpSecurity = (NonEmpty(Get("Mail:SmtpSecurity", "SMTP_SECURITY")) ?? "ssl").ToLowerInvariant();
+
+        if (options.SmtpSecurity is not ("ssl" or "starttls" or "none"))
+            throw new InvalidOperationException("SMTP_SECURITY must be ssl, starttls or none.");
+
+        string? port = NonEmpty(Get("Mail:SmtpPort", "SMTP_PORT"));
+        options.SmtpPort = port == null ? (options.SmtpSecurity == "ssl" ? 465 : 587) : int.TryParse(port, out int parsedPort) && parsedPort is > 0 and < 65536
+            ? parsedPort : throw new InvalidOperationException("SMTP_PORT must be a port number.");
+
+        options.MailFrom = (NonEmpty(Get("Mail:From", "MAIL_FROM")) ?? (options.SmtpUsername.Contains('@') ? options.SmtpUsername : "")).Trim();
+        options.MailFromName = NonEmpty(Get("Mail:FromName", "MAIL_FROM_NAME")) ?? options.BrandName;
+
+        string? rate = NonEmpty(Get("Mail:PerMinute", "MAIL_PER_MINUTE"));
+        options.MailPerMinute = rate == null ? 120 : int.TryParse(rate, out int parsedRate) && parsedRate > 0
+            ? parsedRate : throw new InvalidOperationException("MAIL_PER_MINUTE must be a positive number.");
+
+        options.EmailSignup = Flag("Mail:Signup", "EMAIL_SIGNUP", true);
 
         string? shield = Get("MonkeShieldUrl", "MONKESHIELD_URL");
 

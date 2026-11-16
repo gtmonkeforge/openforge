@@ -12,6 +12,9 @@ public static partial class Text
 {
     public const string DefaultAccent = "#dc5c3b";
 
+    // Discord accounts use their numeric Discord ID and groups use "group-"; accounts made with an email address use this prefix.
+    public const string EmailAccountPrefix = "mf_";
+
     public static readonly string[] Capabilities = ["internet", "auto_update", "extensions"];
     public static readonly string[] Categories = ["Gameplay", "Cosmetic", "Utilities", "Accessibility", "Other"];
     public static readonly string[] Loaders = ["bepinex5", "bepinex6", "melonloader"];
@@ -39,6 +42,10 @@ public static partial class Text
 
     [GeneratedRegex(@"\A[A-Za-z0-9][A-Za-z0-9_.-]{2,31}\z")]
     public static partial Regex PublicUsername();
+
+    // Deliberately loose: the verification email is the real check. One @, no spaces, a dot in the domain.
+    [GeneratedRegex(@"\A[^@\s<>()\[\],;:""]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+\z")]
+    public static partial Regex Email();
 
     [GeneratedRegex(@"\A#[0-9a-fA-F]{6}\z")]
     public static partial Regex HexColor();

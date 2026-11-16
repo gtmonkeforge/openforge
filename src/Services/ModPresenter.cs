@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
@@ -118,7 +119,7 @@ public sealed class ModPresenter
             {
                 Id = row.AuthorId,
                 Name = row.DisplayName,
-                DiscordUsername = row.Username,
+                DiscordUsername = row.AuthorId.StartsWith(Text.EmailAccountPrefix, StringComparison.Ordinal) || row.AuthorId.StartsWith("group-", StringComparison.Ordinal) ? "" : row.Username,
                 IsAdmin = row.IsAdmin != 0 || (_options.RootAdminId != "" && row.AuthorId == _options.RootAdminId),
                 IsVerified = authorVerified,
                 Avatar = row.AuthorAvatar,

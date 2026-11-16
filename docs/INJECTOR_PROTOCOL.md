@@ -36,16 +36,16 @@ Generate an **ECDSA P-256** key pair. Keep the private key in the OS keystore, m
 ```
 POST /api/v1/injector/devices
 { "name": "Ben's PC", "public_key": "<base64 SubjectPublicKeyInfo DER>" }
-→ 201 { "id": "<device id>", "name": "Ben's PC" }
+-> 201 { "id": "<device id>", "name": "Ben's PC" }
 ```
 
-Store the device ID next to the key. Errors: `409` if the key is already registered or the account already has 3 devices. Users manage devices under **Settings → Devices** (`GET /api/v1/injector/devices`, `DELETE /api/v1/injector/devices/{id}`).
+Store the device ID next to the key. Errors: `409` if the key is already registered or the account already has 3 devices. Users manage devices under **Settings -> Devices** (`GET /api/v1/injector/devices`, `DELETE /api/v1/injector/devices/{id}`).
 
 ## 2. Challenge
 
 ```
 POST /api/v1/injector/challenge
-→ { "nonce": "<base64url>", "expires_in": 60 }
+-> { "nonce": "<base64url>", "expires_in": 60 }
 ```
 
 ## 3. Payload request

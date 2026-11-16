@@ -26,9 +26,11 @@ public sealed class SessionUserDto
     public bool IsRoot { get; init; }
     public string DiscordUsername { get; init; } = "";
     public string ProfileUrl { get; init; } = "";
+    public string AuthProvider { get; init; } = "discord";
+    public bool HasEmail { get; init; }
 }
 
-public sealed record SessionDto(SessionUserDto? User, string CsrfToken, bool OauthConfigured);
+public sealed record SessionDto(SessionUserDto? User, string CsrfToken, bool OauthConfigured, bool EmailSignup, bool MailConfigured);
 
 public sealed class GroupMemberDto
 {

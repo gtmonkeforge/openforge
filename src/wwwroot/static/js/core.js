@@ -3,7 +3,7 @@ import { copy as storeCopy } from './store-copy.js';
 export const app = document.querySelector('#app');
 export const boot = JSON.parse(document.querySelector('#boot')?.textContent || '{}');
 export const brand = boot.brand || { name: 'MonkeForge', tint_favicon: true };
-export const auth = { user: null, csrf_token: '', oauth_configured: false };
+export const auth = { user: null, csrf_token: '', oauth_configured: false, email_signup: false, mail_configured: false };
 
 export const loaderLabels = { bepinex5: 'BepInEx 5', bepinex6: 'BepInEx 6', melonloader: 'MelonLoader' };
 export const categories = ['Gameplay', 'Cosmetic', 'Utilities', 'Accessibility', 'Other'];
@@ -286,15 +286,17 @@ export function applyAccent(color) {
     });
 }
 
+export const signInNext = ['/browse', '/upload', '/profile', '/admin', '/settings'];
+
 export function signInUrl(next = location.pathname) {
-    const allowed = ['/browse', '/upload', '/profile', '/admin'];
-    return '/auth/discord?next=' + encodeURIComponent(allowed.includes(next) ? next : '/browse');
+    return '/login?next=' + encodeURIComponent(signInNext.includes(next) ? next : '/browse');
 }
 
 export function requireSignIn(title, text) {
+    const next = signInNext.includes(location.pathname) ? location.pathname : '/browse';
     return `<section class="signin-card surface"><span class="brand-mark" aria-hidden="true"></span><h1>${esc(title)}</h1><p>${esc(text)}</p>
-        <a class="button discord large" href="${signInUrl()}">${icon('discord')}Sign in with Discord</a>
-        ${auth.oauth_configured ? '' : '<p class="notice">Discord sign-in is not configured yet. The site owner needs to add Discord application credentials.</p>'}</section>`;
+        <div class="signin-actions"><a class="button large" href="${signInUrl()}">${icon('user')}Sign in</a>
+        ${auth.email_signup ? `<a class="button subtle large" href="/signup?next=${encodeURIComponent(next)}">Create an account</a>` : ''}</div></section>`;
 }
 
 export function showError(title, message) {

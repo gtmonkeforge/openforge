@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.89" />
     <PackageReference Include="HtmlSanitizer" Version="11.0.26" />
+    <PackageReference Include="MailKit" Version="5.0.0" />
     <PackageReference Include="Markdig" Version="1.6.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0" />
     <PackageReference Include="SkiaSharp" Version="4.156.0" />

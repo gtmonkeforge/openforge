@@ -304,7 +304,7 @@ public static class AdminEndpoints
             throw ApiException.Forbidden("The root administrator is configured in .env and cannot be removed here.");
 
         UserRow target = db.One<UserRow>("SELECT * FROM users WHERE id=@uid", new { uid })
-            ?? throw ApiException.NotFound("This user must sign in with Discord before being added as an admin.");
+            ?? throw ApiException.NotFound("This user must sign in at least once before being added as an admin.");
 
         if (isAdmin && target.Banned)
             throw ApiException.BadRequest("Unban this user before granting administrator access.");

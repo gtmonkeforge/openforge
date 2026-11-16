@@ -23,12 +23,14 @@ public sealed class StripeClient
     private readonly ForgeOptions _options;
     private readonly IHttpClientFactory _http;
     private readonly ILogger<StripeClient> _logger;
+    private readonly Diagnostics _diagnostics;
 
-    public StripeClient(ForgeOptions options, IHttpClientFactory http, ILogger<StripeClient> logger)
+    public StripeClient(ForgeOptions options, IHttpClientFactory http, ILogger<StripeClient> logger, Diagnostics diagnostics)
     {
         _options = options;
         _http = http;
         _logger = logger;
+        _diagnostics = diagnostics;
     }
 
     public void RequireConfigured()
@@ -76,19 +78,31 @@ public sealed class StripeClient
             if (response.IsSuccessStatusCode && json != null)
                 return json;
 
-            // Stripe's messages can mention account internals, so only the type and code are logged and users get a generic message.
+            // Stripe's message goes only to the server log, which only the operator reads. Users always get a generic message.
+            // Account-level errors (such as a missing business name) have no param or code, so without the message the log says nothing useful.
             string type = json?["error"]?["type"]?.ToString() ?? "unknown";
             string code = json?["error"]?["code"]?.ToString() ?? "";
-
-            // The parameter name and the dashboard log link carry no account details, and the link opens the full error for the account owner.
             string param = json?["error"]?["param"]?.ToString() ?? "";
+            string message = json?["error"]?["message"]?.ToString() ?? "";
             string log = json?["error"]?["request_log_url"]?.ToString() ?? "";
-            _logger.LogWarning("Stripe {Method} {Path} failed: HTTP {Status} {Type} {Code} param={Param} {Log}", request.Method, request.RequestUri?.AbsolutePath, (int)response.StatusCode, type, code, param, log);
+            _logger.LogWarning("Stripe {Method} {Path} failed: HTTP {Status} {Type} {Code} param={Param} message={Message} {Log}", request.Method, request.RequestUri?.AbsolutePath, (int)response.StatusCode, type, code, param, message, log);
+            _diagnostics.Report("Stripe " + type,
+                message != "" ? message : $"Stripe returned HTTP {(int)response.StatusCode}.",
+                string.Join('\n', new[]
+                {
+                    $"Request: {request.Method} {request.RequestUri?.AbsolutePath}",
+                    $"Status: HTTP {(int)response.StatusCode}",
+                    connectedAccount != null ? $"Connected account: {connectedAccount}" : "Account: platform",
+                    code != "" ? $"Code: {code}" : null,
+                    param != "" ? $"Param: {param}" : null,
+                    log != "" ? $"Stripe log: {log}" : null,
+                }.Where(line => line != null)));
             throw new ApiException(502, "The payment provider could not complete this request. Please try again in a moment.");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             _logger.LogWarning("Stripe {Path} unreachable: {Type}", request.RequestUri?.AbsolutePath, ex.GetType().Name);
+            _diagnostics.Report("Stripe unreachable", $"Could not reach Stripe ({ex.GetType().Name}): {ex.Message}", $"Request: {request.Method} {request.RequestUri?.AbsolutePath}");
             throw new ApiException(502, "The payment provider could not be reached. Please try again in a moment.");
         }
     }
@@ -137,6 +151,25 @@ public sealed class StripeClient
         }
 
         return false;
+    }
+
+    // Checkout on a creator's account shows that creator's own Stripe branding unless the session overrides it, so every session
+    // carries the site's name, logo and colour. sellerName adds a line saying who the buyer is paying, because the creator's business
+    // name still appears in Stripe's terms and on the card statement.
+    public static void AddBranding(List<KeyValuePair<string, string>> form, ForgeOptions options, string? sellerName = null)
+    {
+        form.Add(new("branding_settings[display_name]", options.BrandName));
+        form.Add(new("branding_settings[button_color]", Text.DefaultAccent));
+        form.Add(new("branding_settings[border_style]", "rounded"));
+
+        if (options.StripeBrandLogoUrl != null)
+        {
+            form.Add(new("branding_settings[logo][type]", "url"));
+            form.Add(new("branding_settings[logo][url]", options.StripeBrandLogoUrl));
+        }
+
+        if (sellerName != null)
+            form.Add(new("custom_text[submit][message]", $"You're paying {sellerName} through {options.BrandName}. The charge appears on your statement under their name."));
     }
 
     public static string? Str(JsonNode? node)

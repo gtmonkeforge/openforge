@@ -16,13 +16,14 @@ using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Logging;
 using OpenForge.Infrastructure;
 using OpenForge.Models;
+using OpenForge.Services;
 
 namespace OpenForge.Endpoints;
 
 public static partial class AuthEndpoints
 {
     private static readonly string[] NativeFields = ["redirect_uri", "code_challenge", "code_challenge_method", "state"];
-    private static readonly string[] AllowedNext = ["/browse", "/upload", "/profile", "/admin"];
+    public static readonly string[] AllowedNext = ["/browse", "/upload", "/profile", "/admin", "/settings"];
 
     public static void Map(IEndpointRouteBuilder app)
     {
@@ -69,7 +70,8 @@ public static partial class AuthEndpoints
         {
             ["client_id"] = options.DiscordClientId,
             ["response_type"] = "code",
-            ["scope"] = "identify",
+            // email lets us send release notices and announcements to Discord accounts too.
+            ["scope"] = "identify email",
             ["redirect_uri"] = options.PublicUrl + "/auth/discord/callback",
             ["state"] = context.Session.OauthState,
         };
@@ -84,11 +86,23 @@ public static partial class AuthEndpoints
         if (!NativeFields.Any(field => request.Query.ContainsKey(field)))
             return;
 
-        string Value(string key)
-        {
-            return request.Query[key].FirstOrDefault() ?? "";
-        }
+        context.Session.OauthNative = ParseNative(key => request.Query[key].FirstOrDefault() ?? "");
+    }
 
+    // Reads a desktop app's PKCE request, from the query string for Discord or from a JSON "native" object for password and passkey sign-in.
+    public static NativeAuthRequest? ParseNative(JsonNode? node)
+    {
+        if (node == null)
+            return null;
+
+        if (node is not JsonObject native || !native.HasOnly(NativeFields))
+            throw ApiException.BadRequest("Native sign-in requires a loopback HTTP redirect, S256 challenge, and random state.");
+
+        return ParseNative(key => native[key].IsString(out string value) ? value : "");
+    }
+
+    private static NativeAuthRequest ParseNative(Func<string, string> Value)
+    {
         string uri = Value("redirect_uri");
         Match loopback = LoopbackRedirect().Match(uri);
         bool valid = loopback.Success && int.Parse(loopback.Groups[1].Value) is >= 1 and <= 65535
@@ -98,10 +112,28 @@ public static partial class AuthEndpoints
         if (!valid || Value("code_challenge_method") != "S256" || !Challenge().IsMatch(Value("code_challenge")) || !State().IsMatch(Value("state")))
             throw ApiException.BadRequest("Native sign-in requires a loopback HTTP redirect, S256 challenge, and random state.");
 
-        context.Session.OauthNative = new NativeAuthRequest(uri, Value("code_challenge"), Value("code_challenge_method"), Value("state"));
+        return new NativeAuthRequest(uri, Value("code_challenge"), Value("code_challenge_method"), Value("state"));
     }
 
-    private static async Task<IResult> CallbackAsync(HttpRequest request, HttpResponse response, ForgeContext context, ForgeOptions options, Db db, IHttpClientFactory http, ILoggerFactory loggers)
+    // Signs the browser in, then either returns to the site or, for a desktop app, hands it a one-time code on its loopback address.
+    public static string CompleteSignIn(ForgeContext context, Db db, HttpResponse response, string userId, NativeAuthRequest? native, string? next)
+    {
+        context.SignIn(userId);
+
+        if (native == null)
+            return next != null && AllowedNext.Contains(next) ? next : "/upload";
+
+        string nativeCode = Text.UrlToken(32);
+        double now = Text.NowEpoch();
+        db.Exec("DELETE FROM native_auth_codes WHERE expires_at<=@now", new { now });
+        db.Exec("INSERT INTO native_auth_codes VALUES(@hash,@userId,@uri,@challenge,@expires)",
+            new { hash = Text.Sha256Hex(nativeCode), userId, uri = native.RedirectUri, challenge = native.CodeChallenge, expires = now + 60 });
+
+        response.Headers["Referrer-Policy"] = "no-referrer";
+        return QueryHelpers.AddQueryString(native.RedirectUri, new Dictionary<string, string?> { ["code"] = nativeCode, ["state"] = native.State });
+    }
+
+    private static async Task<IResult> CallbackAsync(HttpRequest request, HttpResponse response, ForgeContext context, ForgeOptions options, Db db, IHttpClientFactory http, ILoggerFactory loggers, Diagnostics diagnostics)
     {
         string? expected = context.Session.OauthState;
         double started = context.Session.OauthStarted;
@@ -117,7 +149,7 @@ public static partial class AuthEndpoints
         if (!string.IsNullOrEmpty(request.Query["error"].FirstOrDefault()) || string.IsNullOrEmpty(code))
             throw ApiException.BadRequest("Discord sign-in was canceled. You can try again at any time.");
 
-        JsonObject identity = await DiscordIdentityAsync(code, options, http, loggers.CreateLogger("DiscordOAuth"));
+        JsonObject identity = await DiscordIdentityAsync(code, options, http, loggers.CreateLogger("DiscordOAuth"), diagnostics);
         string id = identity["id"]!.ToString();
         string username = identity["username"]!.ToString();
         string? globalName = identity["global_name"]?.GetValueKind() == JsonValueKind.String ? identity["global_name"]!.ToString() : null;
@@ -130,27 +162,20 @@ public static partial class AuthEndpoints
             throw ApiException.Forbidden("Your account is banned from this site.");
         }
 
-        db.Exec("INSERT INTO users(id,username,display_name) VALUES(@id,@username,@display) ON CONFLICT(id) DO UPDATE SET username=excluded.username, display_name=excluded.display_name",
-            new { id, username, display = string.IsNullOrEmpty(globalName) ? username : globalName });
+        db.Exec("INSERT INTO users(id,username,display_name,created_at) VALUES(@id,@username,@display,@now) ON CONFLICT(id) DO UPDATE SET username=excluded.username, display_name=excluded.display_name",
+            new { id, username, display = string.IsNullOrEmpty(globalName) ? username : globalName, now = Text.NowIso() });
+
+        // Discord only vouches for an address it has verified. One the person typed into settings themselves is left alone.
+        if (identity["email"].IsString(out string email) && identity["verified"]?.GetValueKind() == JsonValueKind.True && Text.Email().IsMatch(email.Trim()))
+            db.Exec("UPDATE users SET email=@email,email_verified=1,email_source='discord' WHERE id=@id AND (email IS NULL OR email_source='discord' OR email_verified=0)",
+                new { email = email.Trim().ToLowerInvariant(), id });
 
         string next = context.Session.OauthNext ?? "/upload";
         NativeAuthRequest? native = context.Session.OauthNative;
-        context.SignIn(id);
-
-        if (native == null)
-            return Results.Redirect(next);
-
-        string nativeCode = Text.UrlToken(32);
-        double now = Text.NowEpoch();
-        db.Exec("DELETE FROM native_auth_codes WHERE expires_at<=@now", new { now });
-        db.Exec("INSERT INTO native_auth_codes VALUES(@hash,@id,@uri,@challenge,@expires)",
-            new { hash = Text.Sha256Hex(nativeCode), id, uri = native.RedirectUri, challenge = native.CodeChallenge, expires = now + 60 });
-
-        response.Headers["Referrer-Policy"] = "no-referrer";
-        return Results.Redirect(QueryHelpers.AddQueryString(native.RedirectUri, new Dictionary<string, string?> { ["code"] = nativeCode, ["state"] = native.State }));
+        return Results.Redirect(CompleteSignIn(context, db, response, id, native, next));
     }
 
-    private static async Task<JsonObject> DiscordIdentityAsync(string code, ForgeOptions options, IHttpClientFactory http, ILogger logger)
+    private static async Task<JsonObject> DiscordIdentityAsync(string code, ForgeOptions options, IHttpClientFactory http, ILogger logger, Diagnostics diagnostics)
     {
         HttpClient client = http.CreateClient("discord");
         string stage = "token exchange";
@@ -192,11 +217,13 @@ public static partial class AuthEndpoints
         catch (DiscordHttpException ex)
         {
             logger.LogWarning("Discord OAuth {Stage} failed: HTTP {Status}", stage, ex.Status);
+            diagnostics.Report("Discord sign-in", $"Discord rejected the {stage} with HTTP {ex.Status}.", "Check the Discord application credentials and the registered redirect URI.");
             throw new ApiException(502, $"Discord rejected the {stage} (HTTP {ex.Status}). Please start sign-in again. If this persists, check the Discord application credentials and registered redirect URI.");
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
         {
             logger.LogWarning("Discord OAuth {Stage} failed: {Type}", stage, ex.GetType().Name);
+            diagnostics.Report("Discord sign-in", $"Discord {stage} failed: {ex.GetType().Name}.", exception: ex);
             throw new ApiException(502, "Discord could not complete sign-in. Please try again.");
         }
     }

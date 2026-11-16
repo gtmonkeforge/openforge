@@ -30,7 +30,7 @@ public static class ChannelEndpoints
 
     private static ModRow Owner(string value, ForgeContext context, Access access)
     {
-        CurrentUser current = context.RequireUser("Sign in with Discord first.");
+        CurrentUser current = context.RequireUser("Sign in first.");
         ModRow? row = access.ResolveMod(value);
 
         if (row == null || row.Status == "deleted")
@@ -170,7 +170,7 @@ public static class ChannelEndpoints
 
     private static async Task<IResult> UnlockAsync(HttpRequest request, ForgeContext context, Access access, Channels channels, Db db)
     {
-        CurrentUser current = context.RequireUser("Sign in with Discord to unlock a release channel.");
+        CurrentUser current = context.RequireUser("Sign in to unlock a release channel.");
         JsonObject? payload = await JsonBody.ReadObjectAsync(request);
 
         if (payload == null || !payload["code"].IsString(out string code) || !Text.ShareCode().IsMatch(code.Trim()))

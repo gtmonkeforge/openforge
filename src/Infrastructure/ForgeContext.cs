@@ -42,7 +42,9 @@ public sealed class CurrentUser
             AccentCustomized = Row.AccentCustomized,
             IsGroup = Row.IsGroup,
             IsRoot = IsRoot,
-            DiscordUsername = Row.Username,
+            DiscordUsername = Row.DiscordName,
+            AuthProvider = Row.Provider,
+            HasEmail = Row.Email != null && Row.EmailVerified != 0,
             ProfileUrl = ProfileUrl,
         };
     }
@@ -77,6 +79,11 @@ public sealed class ForgeContext
                 return _user;
 
             UserRow? row = _db.One<UserRow>("SELECT * FROM users WHERE id=@uid", new { uid });
+
+            // A browser session from before the account's last "sign out everywhere" or password reset no longer counts.
+            if (row != null && ApiUserId == null && row.SessionEpoch != Session.Epoch)
+                row = null;
+
             _loadedFor = uid;
             _user = row == null ? null : new CurrentUser(row, _options.RootAdminId != "" && uid == _options.RootAdminId);
 
@@ -102,7 +109,8 @@ public sealed class ForgeContext
 
     public void SignIn(string userId)
     {
-        Session = new SessionData { UserId = userId, Permanent = true };
+        long epoch = _db.One<long?>("SELECT session_epoch FROM users WHERE id=@userId", new { userId }) ?? 0;
+        Session = new SessionData { UserId = userId, Permanent = true, Epoch = epoch };
         Csrf();
         Refresh();
     }

@@ -62,7 +62,7 @@ function signedOutActions() {
     return `<div class="menu-wrap">
         <button class="icon-button" id="guest-menu-button" aria-label="Site settings" aria-haspopup="menu" aria-expanded="false">${icon('settings')}</button>
     </div>
-    <a class="button discord small" href="${signInUrl()}">${icon('discord')}Sign in</a>`;
+    <a class="button small" href="${signInUrl()}">Sign in</a>`;
 }
 
 function signedInActions() {
@@ -83,7 +83,8 @@ function userMenu() {
             <a role="menuitem" href="/settings">${icon('palette')}Appearance</a>
             <a role="menuitem" href="/software">${icon('rocket')}Get the apps</a>
             <hr>
-            <a role="menuitem" href="${signInUrl()}">${icon('discord')}Sign in with Discord</a>
+            <a role="menuitem" href="${signInUrl()}">${icon('user')}Sign in</a>
+            ${auth.email_signup ? `<a role="menuitem" href="/signup">${icon('plus')}Create an account</a>` : ''}
         </div>`;
     }
 
@@ -97,6 +98,7 @@ function userMenu() {
         <a role="menuitem" href="/settings">${icon('settings')}Settings</a>
         <a role="menuitem" href="${esc(user.profile_url)}#purchases">${icon('tray')}${esc(copy.purchasesNav)}</a>
         <a role="menuitem" href="/settings/payouts">${icon('wallet')}${esc(copy.payoutsNav)}</a>
+        <a role="menuitem" href="/settings/security">${icon('lock')}Sign-in & security</a>
         <a role="menuitem" href="/settings/keys">${icon('key')}Access keys</a>
         <a role="menuitem" href="/settings/channels">${icon('lock')}Unlock a channel</a>
         <a role="menuitem" href="/transfers">${icon('swap')}Ownership transfers</a>

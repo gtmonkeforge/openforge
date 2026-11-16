@@ -19,9 +19,13 @@ public sealed class Subscriptions
     private readonly StripeClient _stripe;
     private readonly ForgeOptions _options;
     private readonly ILogger<Subscriptions> _logger;
+    private readonly Diagnostics _diagnostics;
+    private readonly Payments _payments;
 
-    public Subscriptions(Db db, StripeClient stripe, ForgeOptions options, ILogger<Subscriptions> logger)
+    public Subscriptions(Db db, StripeClient stripe, ForgeOptions options, ILogger<Subscriptions> logger, Diagnostics diagnostics, Payments payments)
     {
+        _payments = payments;
+        _diagnostics = diagnostics;
         _db = db;
         _stripe = stripe;
         _options = options;
@@ -52,12 +56,15 @@ public sealed class Subscriptions
             new("client_reference_id", buyer.Id),
             // Stripe's minimum is 30 minutes after it creates the session, so exactly 30 from here lands just short of it.
             new("expires_at", DateTimeOffset.UtcNow.AddMinutes(35).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture)),
+            // Managed Payments is on by default for newer accounts and rejects line items without a tax code; see StoreEndpoints.CheckoutForm.
+            new("managed_payments[enabled]", "false"),
             new("subscription_data[application_fee_percent]", ForgeOptions.PlatformFeePercent.ToString(CultureInfo.InvariantCulture)),
             new("subscription_data[metadata][monkeforge_subscription]", id),
             new("metadata[kind]", "subscription"),
             new("metadata[monkeforge_subscription]", id),
         };
 
+        StripeClient.AddBranding(form, _options, seller.PublicName);
         JsonObject session = await _stripe.PostAsync("/v1/checkout/sessions", form, seller.StripeAccountId);
         string now = Text.NowIso();
 
@@ -102,6 +109,7 @@ public sealed class Subscriptions
             {
                 failed++;
                 _logger.LogError("Could not cancel subscription {Subscription}; cancel it in Stripe", sub.Id);
+                _diagnostics.Report("Stripe", $"Could not cancel subscription {sub.Id}. Cancel it in the Stripe dashboard.");
             }
         }
 
@@ -235,10 +243,14 @@ public sealed class Subscriptions
             ?? (invoice["payments"]?["data"] as JsonArray)?.Select(p => StripeClient.Str(p?["payment"]?["payment_intent"])).FirstOrDefault(p => p != null);
         string now = Text.NowIso();
 
-        _db.Exec("""
+        int inserted = _db.Exec("""
             INSERT OR IGNORE INTO payments(id,kind,buyer_id,recipient_id,guid,amount_cents,fee_cents,currency,stripe_account,payment_intent,status,created_at,updated_at,subscription_id)
             VALUES(@id,'subscription',@buyer,@owner,@guid,@amount,@fee,@currency,@account,@intent,'paid',@now,@now,@sub)
             """, new { id, buyer = sub.UserId, owner = sub.OwnerId, guid = tier?.Guid, amount, fee = Payments.PlatformFee(amount), currency = StripeClient.Str(invoice["currency"]) ?? sub.Currency, account, intent, now, sub = sub.Id });
+
+        // Stripe redelivers events; the receipt goes out once, for the invoice's first delivery.
+        if (inserted > 0 && _payments.Get(id) is PaymentRow paid)
+            _payments.Receipt(paid);
 
         if (stripeId != null)
             _db.Exec("UPDATE subscriptions SET stripe_subscription=COALESCE(stripe_subscription,@stripeId),status='active',updated_at=@now WHERE id=@sid AND status IN ('pending','past_due','incomplete')",

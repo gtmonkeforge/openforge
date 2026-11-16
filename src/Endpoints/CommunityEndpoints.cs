@@ -50,7 +50,7 @@ public static class CommunityEndpoints
 
     private static CurrentUser SignedIn(ForgeContext context)
     {
-        return context.RequireUser("Sign in with Discord first.");
+        return context.RequireUser("Sign in first.");
     }
 
     private static IResult Ratings(string value, Access access, ForgeContext context, Db db)

@@ -87,19 +87,19 @@ public static class PublishEndpoints
         return result;
     }
 
-    private static Task<IResult> PublishModAsync(HttpRequest request, ForgeContext context, Db db, Access access, Channels channels, Storage storage, MonkeShield shield, Webhooks webhooks)
+    private static Task<IResult> PublishModAsync(HttpRequest request, ForgeContext context, Db db, Access access, Channels channels, Storage storage, MonkeShield shield, Webhooks webhooks, Mailer mailer)
     {
-        return PublishAsync(null, request, context, db, access, channels, storage, shield, webhooks);
+        return PublishAsync(null, request, context, db, access, channels, storage, shield, webhooks, mailer);
     }
 
-    private static Task<IResult> PublishReleaseAsync(string guid, HttpRequest request, ForgeContext context, Db db, Access access, Channels channels, Storage storage, MonkeShield shield, Webhooks webhooks)
+    private static Task<IResult> PublishReleaseAsync(string guid, HttpRequest request, ForgeContext context, Db db, Access access, Channels channels, Storage storage, MonkeShield shield, Webhooks webhooks, Mailer mailer)
     {
-        return PublishAsync(guid, request, context, db, access, channels, storage, shield, webhooks);
+        return PublishAsync(guid, request, context, db, access, channels, storage, shield, webhooks, mailer);
     }
 
-    private static async Task<IResult> PublishAsync(string? targetGuid, HttpRequest request, ForgeContext context, Db db, Access access, Channels channels, Storage storage, MonkeShield shield, Webhooks webhooks)
+    private static async Task<IResult> PublishAsync(string? targetGuid, HttpRequest request, ForgeContext context, Db db, Access access, Channels channels, Storage storage, MonkeShield shield, Webhooks webhooks, Mailer mailer)
     {
-        CurrentUser current = context.RequireUser("Sign in with Discord before publishing.");
+        CurrentUser current = context.RequireUser("Sign in before publishing.");
 
         if (request.ContentType == null || !request.ContentType.StartsWith("multipart/form-data"))
             throw ApiException.BadRequest("Use multipart/form-data.");
@@ -318,6 +318,9 @@ public static class PublishEndpoints
         List<ScanFile> scanFiles = stored.Select(file => new ScanFile(storage.FilePath(file.StoredName), file.Filename, file.Kind)).ToList();
         await shield.FinishAsync(db, guid, channelName, releaseId, scanFiles);
         webhooks.NotifyModStatus(guid, previousStatus, releaseId);
+
+        CurrentUser? uploader = context.User;
+        mailer.ReleaseNotice(guid, releaseId, uploader == null ? "Unknown" : uploader.DisplayName + (context.ApiUserId != null ? " (with an access key)" : ""));
 
         string url = "/view/" + guid + (channelName != "stable" ? "?channel=" + channelName : "");
         return Api.Json(new { guid, url }, 201);

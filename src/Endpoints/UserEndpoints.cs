@@ -52,7 +52,7 @@ public static class UserEndpoints
             Avatar = row.Avatar,
             CustomSlug = row.CustomSlug,
             IsGroup = row.Group,
-            DiscordUsername = row.Username,
+            DiscordUsername = row.DiscordName,
             ProfileUrl = Text.ProfileUrl(row.Id, row.CustomSlug, row.Verified),
             ModCount = db.Scalar<long>("SELECT COUNT(*) FROM mods WHERE author_id=@id AND status != 'deleted'" + visibleOnly, new { id = row.Id }),
             Members = members,
@@ -80,7 +80,7 @@ public static class UserEndpoints
 
     private static async Task<IResult> UpdateProfileAsync(string userId, HttpRequest request, ForgeContext context, Access access, Db db, Storage storage, ForgeOptions options)
     {
-        CurrentUser current = context.RequireUser("Sign in with Discord to edit your profile.");
+        CurrentUser current = context.RequireUser("Sign in to edit your profile.");
 
         UserRow? target = current.Id == userId ? current.Row : db.One<UserRow>("SELECT * FROM users WHERE id=@userId AND is_group=1", new { userId });
 

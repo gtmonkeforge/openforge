@@ -480,6 +480,7 @@ public sealed class MonkeShieldBackfill : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "MonkeShield backfill failed; it will retry on the next start");
+            _services.GetRequiredService<Diagnostics>().Report("MonkeShield backfill", "Backfill failed; it will retry on the next start.", exception: ex);
         }
     }
 }

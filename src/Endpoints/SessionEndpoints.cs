@@ -48,7 +48,7 @@ public static class SessionEndpoints
 
     private static IResult Session(ForgeContext context, ForgeOptions options)
     {
-        return Api.Json(new SessionDto(context.User?.ToDto(), context.Csrf(), options.OAuthConfigured));
+        return Api.Json(new SessionDto(context.User?.ToDto(), context.Csrf(), options.OAuthConfigured, options.EmailSignupEnabled, options.MailConfigured));
     }
 
     private static async Task<IResult> SaveSettingsAsync(HttpRequest request, ForgeContext context, Db db)

@@ -1,4 +1,5 @@
 using System.Linq;
+using OpenForge.Infrastructure;
 
 namespace OpenForge.Models;
 
@@ -22,7 +23,19 @@ public class UserRow
     public int StripeChargesEnabled { get; set; }
     public int StripeTransfersEnabled { get; set; }
     public int StripeDetailsSubmitted { get; set; }
+    public string? Email { get; set; }
+    public int EmailVerified { get; set; }
+    public string? EmailSource { get; set; }
+    public string? PasswordHash { get; set; }
+    public long SessionEpoch { get; set; }
+    public int EmailReleaseNotices { get; set; } = 1;
+    public int EmailAnnouncements { get; set; } = 1;
 
+    public bool IsEmailAccount => Id.StartsWith(Text.EmailAccountPrefix, System.StringComparison.Ordinal);
+    public string Provider => IsEmailAccount ? "email" : "discord";
+
+    // Email accounts have no Discord name; Discord accounts' username column is their Discord username.
+    public string DiscordName => IsEmailAccount || Group ? "" : Username;
     public bool Verified => IsVerified != 0;
     public bool Banned => IsBanned != 0;
     public bool Group => IsGroup != 0;

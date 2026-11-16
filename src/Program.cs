@@ -51,6 +51,9 @@ builder.Services.AddSingleton<MonkeShield>();
 builder.Services.AddSingleton<GitHubReleases>();
 builder.Services.AddSingleton<PayloadVault>();
 builder.Services.AddSingleton<StripeClient>();
+builder.Services.AddSingleton<MailSignal>();
+builder.Services.AddSingleton<AuthThrottle>();
+builder.Services.AddSingleton<Passkeys>();
 builder.Services.AddScoped<Db>();
 builder.Services.AddScoped<ForgeContext>();
 builder.Services.AddScoped<Access>();
@@ -62,7 +65,9 @@ builder.Services.AddScoped<Webhooks>();
 builder.Services.AddScoped<Payments>();
 builder.Services.AddScoped<Subscriptions>();
 builder.Services.AddScoped<Seo>();
+builder.Services.AddScoped<Mailer>();
 builder.Services.AddHostedService<MonkeShieldBackfill>();
+builder.Services.AddHostedService<MailWorker>();
 
 WebApplication app = builder.Build();
 
@@ -70,13 +75,19 @@ WebApplication app = builder.Build();
 app.Services.GetRequiredService<PayloadVault>();
 
 app.UseForgeErrors();
-app.UseStaticFiles();
+// Scripts and styles aren't fingerprinted, so browsers must check for a newer copy instead of guessing how long theirs is good for.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = file => file.Context.Response.Headers.CacheControl = "no-cache",
+});
 app.UseForgeSession();
 app.UseRouting();
 app.UseForgeAuth();
 
 SessionEndpoints.Map(app);
 AuthEndpoints.Map(app);
+AccountEndpoints.Map(app);
+EmailEndpoints.Map(app);
 UserEndpoints.Map(app);
 ModEndpoints.Map(app);
 PublishEndpoints.Map(app);

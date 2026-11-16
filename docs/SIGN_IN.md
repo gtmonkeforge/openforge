@@ -1,11 +1,16 @@
 # Signing in to MonkeForge
 
-MonkeForge doesn't have passwords. Everyone signs in with Discord, and that's it. Your Discord account is your MonkeForge account.
+There are two kinds of MonkeForge account:
 
-This page covers the three ways to sign in, depending on what you're building:
+- **Discord accounts.** Sign in with Discord and your Discord account is your MonkeForge account. The account ID is your Discord user ID.
+- **Email accounts.** Pick a username, give an email address and a password. The account ID starts with `mf_`. You have to confirm the address from the email we send before you can sign in.
 
-- **The website.** Click the button, approve on Discord, done.
-- **Desktop apps** like Launchpad or the CLI. The app opens your browser, you approve on Discord, and the app gets its own session.
+Either kind can add **passkeys** (Face ID, Touch ID, Windows Hello, a phone or a security key) and sign in with those instead.
+
+This page covers the ways to sign in, depending on what you're building:
+
+- **The website.** Go to `/login` and pick Discord, a passkey, or your username/email and password.
+- **Desktop apps** like Launchpad or the CLI. The app opens your browser, you sign in any of those ways, and the app gets its own session.
 - **Scripts and CI.** Use an access key. Keys can only publish releases, nothing else.
 
 At the end there's a section for people running their own OpenForge server.
@@ -14,9 +19,15 @@ At the end there's a section for people running their own OpenForge server.
 
 ## On the website
 
-Hit **Sign in with Discord**. You'll land on Discord's approval screen, which asks for the `identify` permission only. That gives us your user ID, username, display name and avatar. We never see your email, your servers, or your password.
+Hit **Sign in** and choose how.
 
-After you approve, Discord sends you back and you're signed in for 30 days. Every time you use the site the 30 days start over, so you won't get kicked out while you're active.
+**Discord.** You'll land on Discord's approval screen, which asks for the `identify` and `email` permissions. That gives us your user ID, username, display name, avatar and, if Discord has verified it, your email address. We never see your servers or your Discord password. The email is only used for the notices described under [Email](#email); you can change it or turn the notices off in **Settings**.
+
+**Username or email and password.** Make an account at `/signup`. We email a confirmation link that works for 24 hours; until you open it you can't sign in, and trying to sign in sends a fresh link. Forgot the password? `/reset-password` emails a link that works for an hour. Resetting signs you out everywhere else.
+
+**Passkey.** Add one in **Settings -> Sign-in & security**, then use **Sign in with a passkey** on the login page. Passkeys only work on the site's main address (`PUBLIC_URL`).
+
+Whichever you use, you're signed in for 30 days. Every time you use the site the 30 days start over, so you won't get kicked out while you're active.
 
 A couple of things worth knowing:
 
@@ -40,14 +51,16 @@ Here's the whole thing:
 3. **Open the user's browser** to:
 
    ```
-   https://monkeforge.org/auth/discord
+   https://monkeforge.org/login
      ?redirect_uri=http://127.0.0.1:53682/callback
      &code_challenge=<challenge>
      &code_challenge_method=S256
      &state=<state>
    ```
 
-4. **Wait for the browser to hit your server.** After the user approves on Discord, they'll be sent to your `redirect_uri` with `?code=...&state=...`. Check that `state` matches what you sent. If it doesn't, throw the request away. Then show the user a "You can close this tab now" page.
+   `/login` lets the user pick Discord, a passkey or their password. If you only want Discord, `/auth/discord` takes exactly the same parameters and skips the choice.
+
+4. **Wait for the browser to hit your server.** After the user signs in, they'll be sent to your `redirect_uri` with `?code=...&state=...`. Check that `state` matches what you sent. If it doesn't, throw the request away. Then show the user a "You can close this tab now" page.
 
 5. **Swap the code for a session, quickly.** The code works once and expires after 60 seconds.
 
@@ -95,7 +108,7 @@ with urllib.request.urlopen(req) as res:
 
 ### Signing out
 
-Send `POST /api/v1/logout` with the cookie and the CSRF header, then delete what you stored. To be honest about a gap here: sessions live in an encrypted cookie, so the server doesn't keep a list of them, and there's no "sign out of all devices" button yet. A banned account is locked out right away on every device, though, because every request checks the account.
+Send `POST /api/v1/logout` with the cookie and the CSRF header, then delete what you stored. To sign out every device at once, use **Settings -> Sign-in & security -> Sign out other devices** (`POST /api/v1/account/sign-out-everywhere`). Changing or resetting a password does the same. A banned account is locked out right away on every device, because every request checks the account.
 
 ### Using the injector?
 
@@ -127,6 +140,21 @@ Keys are deliberately limited. They can only `POST` to the two publishing endpoi
 | "Refresh the page and try again. The security token is missing or expired." | A POST/PUT/PATCH/DELETE without a valid `X-CSRF-Token`. Get a fresh one from `GET /api/v1/session`. |
 | "API keys may only publish releases." | An access key was used on an endpoint other than publishing. |
 | "Your account is banned from this site." | Exactly what it says. Talk to MonkeForge staff. |
+| "Confirm your email address first." | The email account hasn't been confirmed. A new link was just sent; open it, then sign in. |
+| "Too many sign-in attempts for this account." | Ten wrong passwords in 15 minutes. Wait, or reset the password. |
+| "Passkeys only work on https://…" | The page wasn't on the site's main address. Open `PUBLIC_URL` and try again. |
+
+---
+
+## Email
+
+Accounts with a confirmed address (email accounts, and Discord accounts whose Discord email is verified or who added one in settings) get:
+
+- **Account email**, always: confirmation links, password resets, and alerts when the password, email address or passkeys change.
+- **Release notices**: when anyone uploads a release to a mod you own, or to a mod owned by a publishing group you're in. This is worth keeping on: it's how you'd spot an upload you didn't make, say from a leaked access key.
+- **Announcements** from staff, sent from the admin panel's **Email** tab.
+
+The last two can be turned off in **Settings -> Email** or with the unsubscribe link in each message. Bulk mail carries a one-click `List-Unsubscribe` header too. Discord accounts created before email support pick up their address the next time they sign in with Discord.
 
 ---
 
@@ -146,6 +174,24 @@ If you're hosting OpenForge yourself, sign-in needs a Discord application. It ta
    ROOT_ADMIN_ID=...           # your own Discord user ID, to get the admin panel
    ```
 
-`PUBLIC_URL` has to match the redirect you registered, character for character. If someone visits your server on a different hostname, sign-in sends them to `PUBLIC_URL` first, so the login cookie and Discord's redirect agree.
+`PUBLIC_URL` has to match the redirect you registered, character for character. It also decides where passkeys work: they're tied to its hostname. If someone visits your server on a different hostname, sign-in sends them to `PUBLIC_URL` first, so the login cookie and Discord's redirect agree.
+
+### Email
+
+Email accounts, release notices and announcements need an SMTP server. Without one the site runs Discord-only and the email settings explain that email isn't set up.
+
+```
+SMTP_HOST=smtp.purelymail.com
+SMTP_PORT=465                # 465 with ssl, 587 with starttls
+SMTP_SECURITY=ssl            # ssl, starttls or none
+SMTP_USERNAME=noreply@example.com
+SMTP_PASSWORD=...
+MAIL_FROM=noreply@example.com   # defaults to SMTP_USERNAME
+MAIL_FROM_NAME=My Mods          # defaults to the brand name
+MAIL_PER_MINUTE=120             # sending pace, to stay under your provider's limits
+EMAIL_SIGNUP=true               # false keeps email for notices but stops new email accounts
+```
+
+Mail goes through a queue in the database (`email_outbox`) and a background sender, so a slow or unavailable mail server never holds up a request. Failed sends retry with backoff for about nine hours. Connection problems show up in the admin panel's **Errors** tab. Set up SPF, DKIM and DMARC for the sending domain with your provider, or a lot of this mail will land in spam.
 
 Sessions are encrypted with keys stored in `<DATA_DIR>/keys`. Back that folder up. If those keys are lost, nobody's data is lost, but everyone gets signed out and has to sign in again.

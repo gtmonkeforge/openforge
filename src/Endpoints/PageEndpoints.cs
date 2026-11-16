@@ -26,6 +26,28 @@ public static class PageEndpoints
         foreach (string path in new[] { "/upload", "/settings", "/settings/{section}", "/friends", "/chat", "/groups", "/transfers", "/notifications" })
             app.MapGet(path, (Shell shell) => shell.Page(meta: PageMeta.Private));
 
+        // Sign-in pages must be on the public host: passkeys are bound to it, and so is the session cookie.
+        foreach (string path in new[] { "/login", "/signup" })
+        {
+            app.MapGet(path, (HttpRequest request, Shell shell, ForgeOptions options) =>
+            {
+                string publicHost = new Uri(options.PublicUrl).Authority;
+
+                if (!request.Host.Value!.Equals(publicHost, StringComparison.OrdinalIgnoreCase))
+                    return Results.Redirect(options.PublicUrl + request.Path + request.QueryString);
+
+                return shell.Page(path == "/login" ? "Sign in" : "Create an account", PageMeta.Private);
+            });
+        }
+
+        foreach (string path in new[] { "/verify-email", "/reset-password", "/unsubscribe" })
+            app.MapGet(path, (HttpResponse response, Shell shell) =>
+            {
+                // These URLs carry one-time tokens, which must not leak to other sites through the Referer header.
+                response.Headers["Referrer-Policy"] = "no-referrer";
+                return shell.Page(meta: PageMeta.Private);
+            });
+
         app.MapGet("/software", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("Software", seo.Static("/software", $"Tools for using {options.BrandName} outside the browser: the Launchpad app, the mforge command line, and the OpenForge server.")));
         app.MapGet("/software/launchpad", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("Launchpad", seo.Static("/software/launchpad", $"Launchpad installs your {options.BrandName} mods and starts {(options.BrandGame == "" ? "the game" : options.BrandGame)}. It runs on Windows and Linux, and it’s open source.")));
         app.MapGet("/software/cli", (Shell shell, Seo seo, ForgeOptions options) => shell.Page("mforge CLI", seo.Static("/software/cli", $"mforge installs and updates {options.BrandName} mods from the command line. It’s written in Go and released under the MIT license.")));
@@ -111,7 +133,7 @@ public static class PageEndpoints
 
     private static IResult MyProfile(ForgeContext context)
     {
-        return Results.Redirect(context.User?.ProfileUrl ?? "/auth/discord?next=/profile");
+        return Results.Redirect(context.User?.ProfileUrl ?? "/login?next=/profile");
     }
 
     private static IResult ProfilePage(string userId, HttpContext http, Access access, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
