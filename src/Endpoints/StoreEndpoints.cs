@@ -177,8 +177,7 @@ public static class StoreEndpoints
 
         if (stripeId == null)
         {
-            // A full-dashboard account that pays its own Stripe fees: the creator owns the relationship with Stripe,
-            // handles refunds and disputes on their own sales, and MonkeForge never sees their bank or identity details.
+            // Make a unique stripe key so you don't get the same errored response if one failed
             JsonObject created = await stripe.PostAsync("/v1/accounts",
             [
                 new("controller[stripe_dashboard][type]", "full"),
@@ -188,7 +187,7 @@ public static class StoreEndpoints
                 new("capabilities[card_payments][requested]", "true"),
                 new("capabilities[transfers][requested]", "true"),
                 new("metadata[monkeforge_account]", account.Id),
-            ], idempotencyKey: "monkeforge-account-" + account.Id);
+            ], idempotencyKey: "monkeforge-account-" + account.Id + "-" + DateTime.UtcNow.ToString("yyyyMMddHH", CultureInfo.InvariantCulture));
 
             stripeId = StripeClient.Str(created["id"]) ?? throw new ApiException(502, "The payment provider returned an unexpected response.");
 
