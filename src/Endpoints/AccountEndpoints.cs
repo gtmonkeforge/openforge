@@ -18,7 +18,7 @@ namespace OpenForge.Endpoints;
 public static class AccountEndpoints
 {
     private const double VerifySeconds = 24 * 3600;
-    private const double ResetSeconds = 3600;
+    internal const double ResetSeconds = 3600;
     private const int MaxPasskeys = 20;
 
     // An unverified account can't sign in or own anything, so after a day its username and address are released for someone else.
@@ -77,7 +77,7 @@ public static class AccountEndpoints
         return payload["next"].IsString(out string next) ? next : null;
     }
 
-    private static string IssueToken(Db db, string userId, string purpose, string email, double seconds)
+    internal static string IssueToken(Db db, string userId, string purpose, string email, double seconds)
     {
         string token = Text.UrlToken(32);
         double now = Text.NowEpoch();
@@ -112,15 +112,15 @@ public static class AccountEndpoints
         string html = $"""
             <p style="margin:0 0 12px">Hi {Mailer.Encode(name)},</p>
             <p style="margin:0 0 12px">Confirm that this is your email address to finish creating your {Mailer.Encode(options.BrandName)} account. The link works for 24 hours.</p>
-            <p style="margin:0;color:#6b7280;font-size:14px">If you didn't sign up, ignore this email and the account will be removed.</p>
+            <p style="margin:0;color:#9b9ea6;font-size:14px">If you didn't sign up, ignore this email and the account will be removed.</p>
             """;
         string text = $"Hi {name},\n\nConfirm that this is your email address to finish creating your {options.BrandName} account. The link works for 24 hours:\n\n{url}\n\nIf you didn't sign up, ignore this email and the account will be removed.";
         mailer.Enqueue(email, subject, text, mailer.Layout(subject, html, "Confirm email", url), MailKinds.Account, user.Id);
     }
 
-    private static void SendNotice(Mailer mailer, ForgeOptions options, string to, string? userId, string subject, string message)
+    internal static void SendNotice(Mailer mailer, ForgeOptions options, string to, string? userId, string subject, string message)
     {
-        string html = $"<p style=\"margin:0 0 12px\">{Mailer.Encode(message)}</p><p style=\"margin:0;color:#6b7280;font-size:14px\">If this wasn't you, reset your password and remove any passkeys you don't recognise in your account settings.</p>";
+        string html = $"<p style=\"margin:0 0 12px\">{Mailer.Encode(message)}</p><p style=\"margin:0;color:#9b9ea6;font-size:14px\">If this wasn't you, reset your password and remove any passkeys you don't recognise in your account settings.</p>";
         string text = message + "\n\nIf this wasn't you, reset your password and remove any passkeys you don't recognise: " + options.PublicUrl + "/settings/security";
         mailer.Enqueue(to, subject, text, mailer.Layout(subject, html, "Review security settings", options.PublicUrl + "/settings/security"), MailKinds.Account, userId);
     }
@@ -200,7 +200,7 @@ public static class AccountEndpoints
             else
             {
                 string subject = $"You already have a {options.BrandName} account";
-                string html = $"<p style=\"margin:0 0 12px\">Someone tried to create a new {Mailer.Encode(options.BrandName)} account with this email address, but you already have one: <strong>{Mailer.Encode(existing.PublicUsername ?? existing.Username)}</strong>.</p><p style=\"margin:0;color:#6b7280;font-size:14px\">If that was you, sign in instead, or reset your password if you've forgotten it. Otherwise you can ignore this email.</p>";
+                string html = $"<p style=\"margin:0 0 12px\">Someone tried to create a new {Mailer.Encode(options.BrandName)} account with this email address, but you already have one: <strong>{Mailer.Encode(existing.PublicUsername ?? existing.Username)}</strong>.</p><p style=\"margin:0;color:#9b9ea6;font-size:14px\">If that was you, sign in instead, or reset your password if you've forgotten it. Otherwise you can ignore this email.</p>";
                 string text = $"Someone tried to create a new {options.BrandName} account with this email address, but you already have one: {existing.PublicUsername ?? existing.Username}.\n\nSign in: {options.PublicUrl}/login\nForgot your password? {options.PublicUrl}/reset-password";
                 mailer.Enqueue(email, subject, text, mailer.Layout(subject, html, "Sign in", options.PublicUrl + "/login"), MailKinds.Account, existing.Id);
             }
@@ -331,7 +331,7 @@ public static class AccountEndpoints
             string token = IssueToken(db, user.Id, "reset", email, ResetSeconds);
             string url = options.PublicUrl + "/reset-password?token=" + Uri.EscapeDataString(token);
             string subject = $"Reset your {options.BrandName} password";
-            string html = $"<p style=\"margin:0 0 12px\">Someone asked to reset the password for <strong>{Mailer.Encode(user.PublicUsername ?? user.Username)}</strong>. The link works for one hour.</p><p style=\"margin:0;color:#6b7280;font-size:14px\">If that wasn't you, ignore this email. Your password won't change.</p>";
+            string html = $"<p style=\"margin:0 0 12px\">Someone asked to reset the password for <strong>{Mailer.Encode(user.PublicUsername ?? user.Username)}</strong>. The link works for one hour.</p><p style=\"margin:0;color:#9b9ea6;font-size:14px\">If that wasn't you, ignore this email. Your password won't change.</p>";
             string text = $"Someone asked to reset the password for {user.PublicUsername ?? user.Username}. The link works for one hour:\n\n{url}\n\nIf that wasn't you, ignore this email. Your password won't change.";
             mailer.Enqueue(email, subject, text, mailer.Layout(subject, html, "Choose a new password", url), MailKinds.Account, user.Id);
         }
@@ -487,7 +487,7 @@ public static class AccountEndpoints
         string token = IssueToken(db, row.Id, "change", email, VerifySeconds);
         string url = options.PublicUrl + "/verify-email?token=" + Uri.EscapeDataString(token);
         string subject = $"Confirm your new {options.BrandName} email";
-        string html = $"<p style=\"margin:0 0 12px\">Confirm that you want to use this address for your {Mailer.Encode(options.BrandName)} account <strong>{Mailer.Encode(current.Username)}</strong>. The link works for 24 hours.</p><p style=\"margin:0;color:#6b7280;font-size:14px\">If you didn't ask for this, ignore this email.</p>";
+        string html = $"<p style=\"margin:0 0 12px\">Confirm that you want to use this address for your {Mailer.Encode(options.BrandName)} account <strong>{Mailer.Encode(current.Username)}</strong>. The link works for 24 hours.</p><p style=\"margin:0;color:#9b9ea6;font-size:14px\">If you didn't ask for this, ignore this email.</p>";
         string text = $"Confirm that you want to use this address for your {options.BrandName} account {current.Username}. The link works for 24 hours:\n\n{url}\n\nIf you didn't ask for this, ignore this email.";
         mailer.Enqueue(email, subject, text, mailer.Layout(subject, html, "Confirm email", url), MailKinds.Account, row.Id);
 

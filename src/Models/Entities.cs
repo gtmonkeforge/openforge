@@ -23,6 +23,9 @@ public class UserRow
     public int StripeChargesEnabled { get; set; }
     public int StripeTransfersEnabled { get; set; }
     public int StripeDetailsSubmitted { get; set; }
+    public string? StripeProfileIssues { get; set; }
+    public string? StripeProfileFlaggedAt { get; set; }
+    public int StripeProfileGrace { get; set; }
     public string? Email { get; set; }
     public int EmailVerified { get; set; }
     public string? EmailSource { get; set; }
@@ -30,6 +33,8 @@ public class UserRow
     public long SessionEpoch { get; set; }
     public int EmailReleaseNotices { get; set; } = 1;
     public int EmailAnnouncements { get; set; } = 1;
+    public string? CreatedAt { get; set; }
+    public string? DeletedAt { get; set; }
 
     public bool IsEmailAccount => Id.StartsWith(Text.EmailAccountPrefix, System.StringComparison.Ordinal);
     public string Provider => IsEmailAccount ? "email" : "discord";
@@ -133,6 +138,7 @@ public sealed class SubscriptionRow
     public string? CurrentPeriodEnd { get; set; }
     public string CreatedAt { get; set; } = "";
     public string UpdatedAt { get; set; } = "";
+    public int CollectionPaused { get; set; }
 
     // past_due keeps access while Stripe retries the card; Stripe ends the subscription if retries run out.
     public static readonly string[] GrantingStatuses = ["active", "trialing", "past_due"];

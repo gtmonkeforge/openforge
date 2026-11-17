@@ -24,13 +24,15 @@ public sealed partial class Seo
     private readonly ForgeOptions _options;
     private readonly MarkdownRenderer _markdown;
     private readonly Payments _payments;
+    private readonly DocsStore _docs;
 
-    public Seo(Db db, ForgeOptions options, MarkdownRenderer markdown, Payments payments)
+    public Seo(Db db, ForgeOptions options, MarkdownRenderer markdown, Payments payments, DocsStore docs)
     {
         _db = db;
         _options = options;
         _markdown = markdown;
         _payments = payments;
+        _docs = docs;
     }
 
     private string Game => _options.BrandGame;
@@ -286,6 +288,12 @@ public sealed partial class Seo
 
         foreach (string path in new[] { "/software", "/software/launchpad", "/software/cli", "/software/openforge", "/terms", "/privacy" })
             Url(path);
+
+        if (_docs.Find(DocsStore.IndexSlug) == null)
+            Url("/docs");
+
+        foreach (DocPage page in _docs.Pages)
+            Url(page.Url, page.UpdatedAt.ToString("O"));
 
         return xml.Append("</urlset>\n").ToString();
     }

@@ -137,6 +137,62 @@ public static class Schema
 
         MigrateStore(db);
         MigrateAccounts(db);
+        MigrateAdmin(db);
+    }
+
+    private static void MigrateAdmin(SqliteConnection db)
+    {
+        if (!Columns(db, "users").Contains("deleted_at"))
+            db.Execute("ALTER TABLE users ADD COLUMN deleted_at TEXT");
+
+        // NULL for an announcement to everyone; the address for one sent to a single person.
+        if (!Columns(db, "email_broadcasts").Contains("target"))
+            db.Execute("ALTER TABLE email_broadcasts ADD COLUMN target TEXT");
+
+        HashSet<string> outbox = Columns(db, "email_outbox");
+
+        // sender picks the SMTP account: 'default' is MAIL_FROM, 'support' is the support mailbox. The rest thread replies in mail clients.
+        foreach (var (name, definition) in new[]
+        {
+            ("sender", "TEXT NOT NULL DEFAULT 'default'"), ("message_id", "TEXT"), ("in_reply_to", "TEXT"), ("references_header", "TEXT"),
+        })
+        {
+            if (!outbox.Contains(name))
+                db.Execute($"ALTER TABLE email_outbox ADD COLUMN {name} {definition}");
+        }
+
+        db.Execute("""
+            CREATE TABLE IF NOT EXISTS mod_reviews(
+                id INTEGER PRIMARY KEY, guid TEXT NOT NULL, reviewer_id TEXT NOT NULL, decision TEXT NOT NULL CHECK(decision IN ('approved','denied','resubmitted')),
+                reason TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS mod_reviews_guid ON mod_reviews(guid,id);
+            CREATE TABLE IF NOT EXISTS support_tickets(
+                id INTEGER PRIMARY KEY, reference TEXT NOT NULL UNIQUE, subject TEXT NOT NULL,
+                requester_email TEXT NOT NULL, requester_name TEXT, user_id TEXT,
+                status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','pending','closed')),
+                assignee_id TEXT, unread INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS support_tickets_status ON support_tickets(status,updated_at);
+            CREATE INDEX IF NOT EXISTS support_tickets_requester ON support_tickets(requester_email);
+            CREATE TABLE IF NOT EXISTS ticket_messages(
+                id INTEGER PRIMARY KEY, ticket_id INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+                direction TEXT NOT NULL CHECK(direction IN ('in','out','auto','note')), author_id TEXT,
+                from_address TEXT NOT NULL, to_address TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL, message_id TEXT, outbox_id INTEGER, created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS ticket_messages_ticket ON ticket_messages(ticket_id,id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ticket_messages_mid ON ticket_messages(message_id) WHERE message_id IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS ticket_attachments(
+                id TEXT PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES ticket_messages(id) ON DELETE CASCADE,
+                filename TEXT NOT NULL, content_type TEXT NOT NULL, size INTEGER NOT NULL, stored_name TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS support_macros(
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, author_id TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS support_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS email_drafts(
+                id TEXT PRIMARY KEY, author_id TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '',
+                audience TEXT NOT NULL DEFAULT 'subscribed', to_address TEXT, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS admin_handoffs(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, epoch INTEGER NOT NULL, expires REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS admin_audit_created ON admin_audit(created_at);
+            """);
     }
 
     private static void MigrateAccounts(SqliteConnection db)
@@ -190,6 +246,10 @@ public static class Schema
         {
             ("stripe_account_id", "TEXT"), ("stripe_charges_enabled", "INTEGER NOT NULL DEFAULT 0"),
             ("stripe_transfers_enabled", "INTEGER NOT NULL DEFAULT 0"), ("stripe_details_submitted", "INTEGER NOT NULL DEFAULT 0"),
+            // Privacy check of the account's public Stripe details: what's wrong (comma-separated, NULL when fine),
+            // when it first went wrong, and whether the account still gets a grace period. Accounts that existed
+            // before the check get one; accounts MonkeForge pre-filled, or that once passed, don't.
+            ("stripe_profile_issues", "TEXT"), ("stripe_profile_flagged_at", "TEXT"), ("stripe_profile_grace", "INTEGER NOT NULL DEFAULT 1"),
         })
         {
             if (!userColumns.Contains(name))
@@ -299,6 +359,10 @@ public static class Schema
             CREATE UNIQUE INDEX IF NOT EXISTS open_subscription_dispute ON staff_disputes(subscription_id) WHERE status='open' AND subscription_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS disputes_status ON staff_disputes(status,created_at);
             """);
+
+        // Billing pauses while the seller's public Stripe details would expose them, so renewal receipts can't.
+        if (!Columns(db, "subscriptions").Contains("collection_paused"))
+            db.Execute("ALTER TABLE subscriptions ADD COLUMN collection_paused INTEGER NOT NULL DEFAULT 0");
     }
 
     private static void MigrateChannels(SqliteConnection db)

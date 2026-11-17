@@ -67,11 +67,6 @@ public static class PageEndpoints
         app.MapGet("/view/{value}/monkeshield", ShieldPage);
         app.MapGet("/profile", MyProfile);
         app.MapGet("/profile/{userId}", ProfilePage);
-        app.MapGet("/admin", (ForgeContext context, Shell shell) =>
-        {
-            AdminEndpoints.RequireAdmin(context);
-            return shell.Page("Admin", PageMeta.Private);
-        });
 
         app.MapGet("/brand/logo", (ForgeOptions options, IWebHostEnvironment environment) => BrandFile(options.BrandLogo ?? Path.Combine(environment.WebRootPath, "static", "logo.svg")));
         app.MapGet("/brand/favicon", (ForgeOptions options, IWebHostEnvironment environment) => BrandFile(options.BrandFavicon ?? options.BrandLogo ?? Path.Combine(environment.WebRootPath, "static", "favicon.svg")));

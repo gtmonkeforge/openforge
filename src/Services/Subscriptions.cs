@@ -93,6 +93,39 @@ public sealed class Subscriptions
             new { immediately, now = Text.NowIso(), id = sub.Id });
     }
 
+    // Pauses billing on the owner's memberships while their public Stripe details would expose them (each renewal sends
+    // a receipt from their account), and resumes it once they're fixed. Members keep access meanwhile: it isn't their fault.
+    // Calls Stripe, so it runs outside any database transaction.
+    public async Task SyncCollectionAsync(string ownerId)
+    {
+        UserRow? owner = _db.One<UserRow>("SELECT * FROM users WHERE id=@ownerId", new { ownerId });
+
+        if (owner == null)
+            return;
+
+        int pause = Payments.ProfileAllowsSales(owner) ? 0 : 1;
+        List<SubscriptionRow> changing = _db.Query<SubscriptionRow>("""
+            SELECT * FROM subscriptions WHERE owner_id=@ownerId AND stripe_subscription IS NOT NULL
+            AND status IN ('active','trialing','past_due') AND collection_paused!=@pause
+            """, new { ownerId, pause }).ToList();
+
+        foreach (SubscriptionRow sub in changing)
+        {
+            try
+            {
+                // "void" skips the invoices outright, so nothing is charged and no receipt goes out while paused.
+                await _stripe.PostAsync("/v1/subscriptions/" + Uri.EscapeDataString(sub.StripeSubscription!),
+                    pause == 1 ? [new("pause_collection[behavior]", "void")] : [new("pause_collection", "")], sub.StripeAccount);
+                _db.Exec("UPDATE subscriptions SET collection_paused=@pause,updated_at=@now WHERE id=@id", new { pause, now = Text.NowIso(), id = sub.Id });
+            }
+            catch (ApiException)
+            {
+                // The daily privacy sweep tries again.
+                _logger.LogWarning("Could not {Action} billing for subscription {Subscription}", pause == 1 ? "pause" : "resume", sub.Id);
+            }
+        }
+    }
+
     // Cancels many subscriptions without stopping at the first Stripe failure, and reports what happened.
     public async Task<(int Cancelled, int Failed)> CancelManyAsync(IEnumerable<SubscriptionRow> subs, bool immediately)
     {

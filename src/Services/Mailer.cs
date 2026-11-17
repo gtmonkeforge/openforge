@@ -30,6 +30,10 @@ public static class MailKinds
 
     // The two kinds a person can turn off. They match the users.email_* columns.
     public const string ReleasesTopic = "releases";
+
+    // Support desk mail leaves from the support mailbox. Staff replies are written by a person; auto-replies say so in their headers.
+    public const string Support = "support";
+    public const string SupportAuto = "support_auto";
     public const string AnnouncementsTopic = "announcements";
 }
 
@@ -44,6 +48,28 @@ public sealed class OutboxRow
     public string Kind { get; set; } = "";
     public string? ListUnsubscribe { get; set; }
     public int Attempts { get; set; }
+    public string Sender { get; set; } = MailSenders.Default;
+    public string? MessageId { get; set; }
+    public string? InReplyTo { get; set; }
+    public string? ReferencesHeader { get; set; }
+}
+
+public static class MailSenders
+{
+    public const string Default = "default";
+    public const string Support = "support";
+}
+
+// One SMTP login and the address it sends as.
+public sealed record SmtpAccount(string Host, int Port, string Security, string Username, string Password, string FromAddress, string FromName)
+{
+    public static SmtpAccount? For(ForgeOptions options, string sender)
+    {
+        if (sender == MailSenders.Support)
+            return options.SupportConfigured ? new SmtpAccount(options.SupportSmtpHost, options.SupportSmtpPort, options.SupportSmtpSecurity, options.SupportMailUsername, options.SupportMailPassword, options.SupportEmail!, options.SupportFromName) : null;
+
+        return options.MailConfigured ? new SmtpAccount(options.SmtpHost, options.SmtpPort, options.SmtpSecurity, options.SmtpUsername, options.SmtpPassword, options.MailFrom, options.MailFromName) : null;
+    }
 }
 
 // Wakes the mail worker as soon as something is queued, instead of waiting for its next poll.
@@ -100,17 +126,21 @@ public sealed class Mailer
         return subject.Length > 200 ? subject[..199] + "…" : subject;
     }
 
-    public void Enqueue(string to, string subject, string text, string html, string kind, string? userId = null, string? broadcastId = null, string? listUnsubscribe = null)
+    public long Enqueue(string to, string subject, string text, string html, string kind, string? userId = null, string? broadcastId = null, string? listUnsubscribe = null,
+        string sender = MailSenders.Default, string? messageId = null, string? inReplyTo = null, string? references = null)
     {
-        if (!Enabled)
-            return;
+        if (SmtpAccount.For(_options, sender) == null)
+            return 0;
 
+        int priority = kind is MailKinds.Account or MailKinds.Receipt or MailKinds.Support or MailKinds.SupportAuto ? 0 : kind == MailKinds.Release ? 1 : 2;
         _db.Exec("""
-            INSERT INTO email_outbox(user_id,to_address,subject,text_body,html_body,kind,priority,broadcast_id,list_unsubscribe,next_attempt,created)
-            VALUES(@userId,@to,@subject,@text,@html,@kind,@priority,@broadcastId,@listUnsubscribe,@now,@now)
-            """, new { userId, to, subject = CleanSubject(subject), text, html, kind, priority = kind is MailKinds.Account or MailKinds.Receipt ? 0 : kind == MailKinds.Release ? 1 : 2, broadcastId, listUnsubscribe, now = Text.NowEpoch() });
+            INSERT INTO email_outbox(user_id,to_address,subject,text_body,html_body,kind,priority,broadcast_id,list_unsubscribe,next_attempt,created,sender,message_id,in_reply_to,references_header)
+            VALUES(@userId,@to,@subject,@text,@html,@kind,@priority,@broadcastId,@listUnsubscribe,@now,@now,@sender,@messageId,@inReplyTo,@references)
+            """, new { userId, to, subject = CleanSubject(subject), text, html, kind, priority, broadcastId, listUnsubscribe, now = Text.NowEpoch(), sender, messageId, inReplyTo, references });
 
+        long id = _db.LastInsertId();
         _signal.Pulse();
+        return id;
     }
 
     public void Pulse()
@@ -118,30 +148,58 @@ public sealed class Mailer
         _signal.Pulse();
     }
 
-    // The whole message in one table-based layout with inline styles, since mail clients ignore stylesheets.
+    // Matches the site's dark theme. Everything is one table-based layout with inline styles, since mail clients ignore stylesheets.
+    public const string Accent = "#dc5c3b";
+    public const string Ink = "#ececee";
+    public const string Muted = "#9b9ea6";
+    public const string Surface = "#18191c";
+    public const string Surface2 = "#1f2125";
+    public const string Line = "#2a2c31";
+    public const string Background = "#111214";
+
     public string Layout(string heading, string bodyHtml, string? actionLabel = null, string? actionUrl = null, string? footerHtml = null)
     {
         string brand = Encode(_options.BrandName);
         string button = actionUrl == null ? "" : $"""
-            <p style="margin:28px 0"><a href="{Encode(actionUrl)}" style="display:inline-block;background:#dc5c3b;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:8px">{Encode(actionLabel ?? "Open")}</a></p>
-            <p style="margin:0 0 16px;color:#6b7280;font-size:13px">If the button doesn't work, paste this link into your browser:<br><a href="{Encode(actionUrl)}" style="color:#dc5c3b;word-break:break-all">{Encode(actionUrl)}</a></p>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 20px"><tr><td bgcolor="{Accent}" style="border-radius:9px">
+            <a href="{Encode(actionUrl)}" style="display:inline-block;padding:12px 22px;border-radius:9px;background:{Accent};color:#ffffff;text-decoration:none;font-weight:600;font-size:15px">{Encode(actionLabel ?? "Open")}</a>
+            </td></tr></table>
+            <p style="margin:0 0 4px;color:{Muted};font-size:13px">If the button doesn't work, paste this link into your browser:<br><a href="{Encode(actionUrl)}" style="color:{Accent};word-break:break-all">{Encode(actionUrl)}</a></p>
             """;
+
+        // Mail clients can't show the SVG logo, so a PNG or JPEG brand image is used when there is one, and a wordmark otherwise.
+        string mark = _options.StripeBrandLogoUrl != null
+            ? $"""<img src="{Encode(_options.StripeBrandLogoUrl)}" alt="{brand}" height="28" style="height:28px;width:auto;border:0;vertical-align:middle">"""
+            : $"""<span style="display:inline-block;width:12px;height:12px;border-radius:4px;background:{Accent};vertical-align:middle;margin-right:9px"></span><span style="vertical-align:middle;font-weight:700;font-size:18px;color:{Ink};letter-spacing:-.01em">{brand}</span>""";
 
         return $"""
             <!doctype html>
-            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{Encode(heading)}</title></head>
-            <body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px"><tr><td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">
-            <tr><td style="padding:0 4px 16px;font-weight:700;font-size:18px;color:#dc5c3b">{brand}</td></tr>
-            <tr><td style="background:#ffffff;border-radius:12px;padding:32px;font-size:15px;line-height:1.6">
-            <h1 style="margin:0 0 16px;font-size:20px;line-height:1.3">{Encode(heading)}</h1>
+            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>{Encode(heading)}</title></head>
+            <body bgcolor="{Background}" style="margin:0;padding:0;background:{Background};font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:{Ink};-webkit-font-smoothing:antialiased">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{Background}" style="background:{Background};padding:36px 12px"><tr><td align="center">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:580px">
+            <tr><td style="padding:0 4px 18px"><a href="{Encode(_options.PublicUrl)}" style="text-decoration:none">{mark}</a></td></tr>
+            <tr><td bgcolor="{Surface}" style="background:{Surface};border:1px solid {Line};border-top:3px solid {Accent};border-radius:12px;padding:32px;font-size:15px;line-height:1.6;color:{Ink}">
+            <h1 style="margin:0 0 18px;font-size:21px;line-height:1.3;font-weight:650;color:{Ink}">{Encode(heading)}</h1>
             {bodyHtml}
             {button}
             </td></tr>
-            <tr><td style="padding:16px 4px;color:#6b7280;font-size:12px;line-height:1.5">{footerHtml ?? $"You're receiving this because of activity on your {brand} account."}</td></tr>
+            <tr><td style="padding:18px 4px;color:{Muted};font-size:12px;line-height:1.55">{footerHtml ?? $"You're receiving this because of activity on your {brand} account."}</td></tr>
             </table></td></tr></table></body></html>
             """;
+    }
+
+    // A muted, monospaced box of label/value rows, like the details lists on the site.
+    public static string DetailsTable(IEnumerable<(string Label, string Value)> rows)
+    {
+        string cells = string.Concat(rows.Select(r => $"""<tr><td style="padding:5px 18px 5px 0;color:{Muted};font-size:13px;white-space:nowrap;vertical-align:top">{Encode(r.Label)}</td><td style="padding:5px 0;color:{Ink};font-size:14px;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">{Encode(r.Value)}</td></tr>"""));
+        return $"""<table role="presentation" cellpadding="0" cellspacing="0" width="100%" bgcolor="{Surface2}" style="background:{Surface2};border:1px solid {Line};border-radius:9px;margin:4px 0 18px"><tr><td style="padding:12px 16px"><table role="presentation" cellpadding="0" cellspacing="0">{cells}</table></td></tr></table>""";
+    }
+
+    // Plain text with line breaks and links kept, for messages a person typed.
+    public static string Paragraphs(string text)
+    {
+        return string.Concat(text.Replace("\r\n", "\n").Split("\n\n").Select(p => $"<p style=\"margin:0 0 14px;color:{Ink}\">{Encode(p).Replace("\n", "<br>")}</p>"));
     }
 
     public string UnsubscribeUrl(string userId, string topic)
@@ -172,7 +230,7 @@ public sealed class Mailer
 
     private string Footer(string userId, string topic, string why)
     {
-        return $"{why} <a href=\"{Encode(UnsubscribeUrl(userId, topic))}\" style=\"color:#6b7280\">Unsubscribe</a> or change what you get in <a href=\"{Encode(_options.PublicUrl + "/settings/emails")}\" style=\"color:#6b7280\">email settings</a>.";
+        return $"{why} <a href=\"{Encode(UnsubscribeUrl(userId, topic))}\" style=\"color:#9b9ea6\">Unsubscribe</a> or change what you get in <a href=\"{Encode(_options.PublicUrl + "/settings/emails")}\" style=\"color:#9b9ea6\">email settings</a>.";
     }
 
     // Emails everyone who can publish to the mod: the author, or every member of the publishing group that owns it.
@@ -210,13 +268,13 @@ public sealed class Mailer
                 string html = $"""
                     <p style="margin:0 0 12px">A new release of <strong>{Encode(mod.Name)}</strong> was uploaded{Encode(channel)}.</p>
                     <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 12px;font-size:14px">
-                    <tr><td style="color:#6b7280;padding:2px 16px 2px 0">Version</td><td><strong>{Encode(release.Version)}</strong></td></tr>
-                    <tr><td style="color:#6b7280;padding:2px 16px 2px 0">Channel</td><td>{Encode(release.Channel)}</td></tr>
-                    <tr><td style="color:#6b7280;padding:2px 16px 2px 0">Uploaded by</td><td>{Encode(uploaderName)}</td></tr>
-                    <tr><td style="color:#6b7280;padding:2px 16px 2px 0">GUID</td><td style="font-family:monospace">{Encode(mod.Guid)}</td></tr>
+                    <tr><td style="color:#9b9ea6;padding:2px 16px 2px 0">Version</td><td><strong>{Encode(release.Version)}</strong></td></tr>
+                    <tr><td style="color:#9b9ea6;padding:2px 16px 2px 0">Channel</td><td>{Encode(release.Channel)}</td></tr>
+                    <tr><td style="color:#9b9ea6;padding:2px 16px 2px 0">Uploaded by</td><td>{Encode(uploaderName)}</td></tr>
+                    <tr><td style="color:#9b9ea6;padding:2px 16px 2px 0">GUID</td><td style="font-family:monospace">{Encode(mod.Guid)}</td></tr>
                     </table>
                     {(review == "" ? "" : $"<p style=\"margin:0 0 12px\">{Encode(review)}</p>")}
-                    <p style="margin:0;color:#6b7280;font-size:14px">Didn't expect this? Check who's in your publishing group and revoke any access keys you don't recognise in <a href="{Encode(_options.PublicUrl + "/settings/keys")}" style="color:#dc5c3b">access keys</a>.</p>
+                    <p style="margin:0;color:#9b9ea6;font-size:14px">Didn't expect this? Check who's in your publishing group and revoke any access keys you don't recognise in <a href="{Encode(_options.PublicUrl + "/settings/keys")}" style="color:#dc5c3b">access keys</a>.</p>
                     """;
                 string text = $"""
                     A new release of {mod.Name} was uploaded{channel}.
@@ -258,7 +316,10 @@ public sealed class Mailer
     // Email bodies are laid out in Layout; Markdown HTML needs inline styles for links to show in the brand color.
     public static string StyleMarkdown(string html)
     {
-        return html.Replace("<a href=", "<a style=\"color:#dc5c3b\" href=").Replace("<p>", "<p style=\"margin:0 0 12px\">");
+        return html.Replace("<a href=", $"<a style=\"color:{Accent}\" href=").Replace("<p>", $"<p style=\"margin:0 0 14px;color:{Ink}\">")
+            .Replace("<li>", $"<li style=\"margin:0 0 6px;color:{Ink}\">").Replace("<code>", $"<code style=\"background:{Surface2};border:1px solid {Line};border-radius:5px;padding:1px 5px;font-size:13px\">")
+            .Replace("<blockquote>", $"<blockquote style=\"margin:0 0 14px;padding:4px 14px;border-left:3px solid {Line};color:{Muted}\">")
+            .Replace("<h2>", $"<h2 style=\"margin:22px 0 10px;font-size:17px;color:{Ink}\">").Replace("<h3>", $"<h3 style=\"margin:18px 0 8px;font-size:15px;color:{Ink}\">");
     }
 }
 
@@ -282,7 +343,7 @@ public sealed class MailWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_options.MailConfigured)
+        if (!_options.MailConfigured && !_options.SupportConfigured)
         {
             _logger.LogInformation("Email is not configured (SMTP_HOST and MAIL_FROM); email sign-up and notices are off.");
             return;
@@ -308,7 +369,8 @@ public sealed class MailWorker : BackgroundService
                     continue;
                 }
 
-                await SendBatchAsync(batch, pace, stoppingToken);
+                foreach (IGrouping<string, OutboxRow> group in batch.GroupBy(row => row.Sender))
+                    await SendBatchAsync(group.ToList(), group.Key, pace, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -322,33 +384,43 @@ public sealed class MailWorker : BackgroundService
         }
     }
 
-    private async Task SendBatchAsync(List<OutboxRow> batch, TimeSpan pace, CancellationToken token)
+    private async Task SendBatchAsync(List<OutboxRow> batch, string sender, TimeSpan pace, CancellationToken token)
     {
         using IServiceScope scope = _services.CreateScope();
         Db db = scope.ServiceProvider.GetRequiredService<Db>();
+        SmtpAccount? account = SmtpAccount.For(_options, sender);
+
+        if (account == null)
+        {
+            foreach (OutboxRow row in batch)
+                db.Exec("UPDATE email_outbox SET status='failed',error=@error WHERE id=@id", new { error = $"The {sender} mail account isn't configured.", id = row.Id });
+
+            return;
+        }
+
         // Chain and hostname are still validated. Online revocation lookups often can't complete (Let's Encrypt no longer runs OCSP),
         // and a failed lookup would stop all mail, so it's skipped like most mail clients do.
         using var smtp = new SmtpClient { CheckCertificateRevocation = false, Timeout = 30000 };
 
         try
         {
-            SecureSocketOptions security = _options.SmtpSecurity switch
+            SecureSocketOptions security = account.Security switch
             {
                 "ssl" => SecureSocketOptions.SslOnConnect,
                 "starttls" => SecureSocketOptions.StartTls,
                 _ => SecureSocketOptions.None,
             };
 
-            await smtp.ConnectAsync(_options.SmtpHost, _options.SmtpPort, security, token);
+            await smtp.ConnectAsync(account.Host, account.Port, security, token);
 
-            if (_options.SmtpUsername != "")
-                await smtp.AuthenticateAsync(_options.SmtpUsername, _options.SmtpPassword, token);
+            if (account.Username != "")
+                await smtp.AuthenticateAsync(account.Username, account.Password, token);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The server itself is unreachable or refused the login: every message in the batch waits and tries again.
-            _logger.LogWarning("Could not connect to the SMTP server {Host}:{Port}: {Type} {Message}", _options.SmtpHost, _options.SmtpPort, ex.GetType().Name, ex.Message);
-            ReportOnce($"Could not connect or sign in to {_options.SmtpHost}:{_options.SmtpPort} ({ex.GetType().Name}: {ex.Message}). Queued email will retry.");
+            _logger.LogWarning("Could not connect to the SMTP server {Host}:{Port}: {Type} {Message}", account.Host, account.Port, ex.GetType().Name, ex.Message);
+            ReportOnce($"Could not connect or sign in to {account.Host}:{account.Port} as {account.Username} ({ex.GetType().Name}: {ex.Message}). Queued email will retry.");
 
             foreach (OutboxRow row in batch)
                 Retry(db, row, ex.Message);
@@ -362,7 +434,7 @@ public sealed class MailWorker : BackgroundService
 
             try
             {
-                await smtp.SendAsync(Build(row), token);
+                await smtp.SendAsync(Build(row, account), token);
 
                 // Sign-in links are useless once delivered, and only a risk if the database leaks, so account mail keeps no body.
                 db.Exec(row.Kind == MailKinds.Account
@@ -401,12 +473,21 @@ public sealed class MailWorker : BackgroundService
         }
     }
 
-    private MimeMessage Build(OutboxRow row)
+    private static MimeMessage Build(OutboxRow row, SmtpAccount account)
     {
         var message = new MimeMessage();
-        message.From.Add(new MailboxAddress(_options.MailFromName, _options.MailFrom));
+        message.From.Add(new MailboxAddress(account.FromName, account.FromAddress));
         message.To.Add(MailboxAddress.Parse(row.ToAddress));
         message.Subject = row.Subject;
+
+        if (row.MessageId != null)
+            message.MessageId = row.MessageId;
+
+        if (row.InReplyTo != null)
+            message.InReplyTo = row.InReplyTo;
+
+        foreach (string reference in (row.ReferencesHeader ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            message.References.Add(reference);
 
         if (row.ListUnsubscribe != null)
         {
@@ -415,7 +496,10 @@ public sealed class MailWorker : BackgroundService
             message.Headers.Add("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
         }
 
-        if (row.Kind != MailKinds.Account)
+        // RFC 3834: auto-replies say so, which stops two autoresponders answering each other forever. People's replies carry nothing.
+        if (row.Kind == MailKinds.SupportAuto)
+            message.Headers.Add("Auto-Submitted", "auto-replied");
+        else if (row.Kind is not (MailKinds.Account or MailKinds.Support))
             message.Headers.Add("Auto-Submitted", "auto-generated");
 
         message.Body = new BodyBuilder { TextBody = row.TextBody, HtmlBody = row.HtmlBody }.ToMessageBody();

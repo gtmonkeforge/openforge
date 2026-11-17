@@ -177,9 +177,13 @@ function notificationLink(item) {
         case 'dispute':
             return '/profile#purchases';
         case 'dispute_staff':
-            return '/admin?tab=Disputes';
+            return '/admin';
+        case 'mod_review':
+            return '/view/' + encodeURIComponent(item.target);
         case 'sale_refund':
             return '/settings/payouts';
+        case 'payout_privacy':
+            return '/settings/payouts?account=' + encodeURIComponent(item.target);
         default:
             return '#';
     }
@@ -255,6 +259,7 @@ export function renderFooter() {
             <a href="/software/launchpad">Launchpad</a>
             <a href="/software/cli">CLI</a>
             <a href="/software/openforge">OpenForge</a>
+            <a href="/docs">Docs</a>
             <a href="/terms">Terms</a>
             <a href="/privacy">Privacy</a>
             <button type="button" class="footer-link" id="support-platform">${esc(fill(copy.footerSupport, { brand: brand.name }))}</button>

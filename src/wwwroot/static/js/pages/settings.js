@@ -245,6 +245,24 @@ function account(body) {
     };
 }
 
+// Shows creators what buyers see from their Stripe account, and which fields to change when those would expose them.
+function privacyPanel(privacy) {
+    const wrong = new Set(privacy.issues);
+    const notice = !wrong.size ? ''
+        : privacy.grace_ends_at ? `<p class="notice">${esc(fill(copy.privacyGrace, { date: new Date(privacy.grace_ends_at).toLocaleDateString() }))}</p>`
+        : `<p class="notice">${esc(copy.privacyProblem)}</p>`;
+    const rows = Object.entries(copy.privacyFields).map(([key, label]) => `
+        <div class="key-item"><div class="grow"><strong>${esc(label)}</strong><div class="mono">${esc(privacy.expected[key] || '')}</div></div>${wrong.has(key) ? `<span class="pill bad">${esc(copy.privacyWrong)}</span>` : ''}</div>`).join('');
+
+    return `<section class="surface panel">
+        <h2>${esc(copy.privacyTitle)}</h2>
+        <p class="hint">${esc(fill(copy.privacyIntro, { brand: brand.name }))}</p>
+        ${notice}
+        ${rows}
+        <div class="row"><a class="button ${wrong.size ? '' : 'subtle'}" href="https://dashboard.stripe.com/settings/public" target="_blank" rel="noopener noreferrer">${icon('external')}${esc(copy.privacyEdit)}</a><a class="button subtle" href="/docs/creators/payouts#keeping-your-details-private">${esc(copy.privacyGuide)}</a></div>
+    </section>`;
+}
+
 async function payouts(body) {
     if (!auth.user) {
         body.innerHTML = requireSignIn(copy.payoutsTitle, fill(copy.payoutsIntro, { brand: brand.name }));
@@ -258,7 +276,8 @@ async function payouts(body) {
     const query = selected === auth.user.id ? '' : '?account=' + encodeURIComponent(selected);
     const status = await api('/api/v1/payouts' + query);
     const values = { brand: brand.name, fee: status.fee_percent };
-    const state = status.charges_enabled ? ['good', copy.payoutsReady] : status.connected ? ['warn', copy.payoutsIncomplete] : ['', copy.payoutsNotConnected];
+    const state = status.charges_enabled && !status.can_sell ? ['bad', copy.payoutsPaused]
+        : status.charges_enabled ? ['good', copy.payoutsReady] : status.connected ? ['warn', copy.payoutsIncomplete] : ['', copy.payoutsNotConnected];
     const cur = status.currency;
     const returned = params.get('onboarding');
 
@@ -274,6 +293,7 @@ async function payouts(body) {
                 ${status.connected ? `<a class="button subtle" href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer">${icon('external')}${esc(copy.payoutsDashboard)}</a>` : ''}
             </div>`}
         </section>
+        ${status.connected && status.privacy ? privacyPanel(status.privacy) : ''}
         ${status.connected ? `<div class="stat-strip payout-totals">
             <div><span>${esc(copy.payoutsSales)}</span><strong>${esc(money(status.totals.sales_cents, cur))}</strong></div>
             <div><span>${esc(fill(copy.payoutsFeesPaid, values))}</span><strong>${esc(money(status.totals.fees_cents, cur))}</strong></div>

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using OpenForge.Endpoints;
@@ -82,9 +84,27 @@ public sealed class Payments
         return _db.One<UserRow>("SELECT * FROM users WHERE id=@id", new { id = mod.AuthorId });
     }
 
+    // Accounts that existed before the privacy check get this long to fix their public details before sales stop.
+    public static readonly TimeSpan ProfileGracePeriod = TimeSpan.FromDays(14);
+
     public static bool CanSell(UserRow? seller)
     {
-        return seller != null && !seller.Banned && seller.StripeAccountId != null && seller.StripeChargesEnabled != 0;
+        return seller != null && !seller.Banned && seller.StripeAccountId != null && seller.StripeChargesEnabled != 0 && ProfileAllowsSales(seller);
+    }
+
+    // Sales on the creator's own Stripe account show buyers its public details, so they stop while those would expose the creator.
+    public static bool ProfileAllowsSales(UserRow seller)
+    {
+        return seller.StripeProfileIssues == null || GraceEndsAt(seller) is DateTime end && DateTime.UtcNow < end;
+    }
+
+    public static DateTime? GraceEndsAt(UserRow seller)
+    {
+        if (seller.StripeProfileIssues == null || seller.StripeProfileGrace == 0 || seller.StripeProfileFlaggedAt == null)
+            return null;
+
+        return DateTime.TryParse(seller.StripeProfileFlaggedAt, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out DateTime flagged)
+            ? flagged + ProfileGracePeriod : null;
     }
 
     public static bool CanReceiveDonations(UserRow? seller)
@@ -92,14 +112,130 @@ public sealed class Payments
         return seller != null && !seller.Banned && seller.StripeAccountId != null && seller.StripeTransfersEnabled != 0;
     }
 
-    public void SaveAccountState(string accountId, JsonObject account)
+    // Returns the owner's id when the account belongs to a MonkeForge user, so callers can sync membership billing afterwards.
+    public string? SaveAccountState(string accountId, JsonObject account)
     {
         bool charges = StripeClient.Flag(account["charges_enabled"]);
         bool details = StripeClient.Flag(account["details_submitted"]);
         bool transfers = StripeClient.Str(account["capabilities"]?["transfers"]) == "active";
 
-        _db.Exec("UPDATE users SET stripe_charges_enabled=@charges,stripe_transfers_enabled=@transfers,stripe_details_submitted=@details WHERE stripe_account_id=@accountId",
-            new { charges = charges ? 1 : 0, transfers = transfers ? 1 : 0, details = details ? 1 : 0, accountId });
+        UserRow? owner = _db.One<UserRow>("SELECT * FROM users WHERE stripe_account_id=@accountId", new { accountId });
+
+        if (owner == null)
+            return null;
+
+        List<string> issues = ProfileIssues(account, _options);
+        string? joined = issues.Count == 0 ? null : string.Join(',', issues);
+        string now = Text.NowIso();
+
+        // A passing check ends the grace period for good: from then on, a change that exposes the creator stops sales at once.
+        _db.Exec("""
+            UPDATE users SET stripe_charges_enabled=@charges,stripe_transfers_enabled=@transfers,stripe_details_submitted=@details,
+            stripe_profile_issues=@joined,
+            stripe_profile_flagged_at=CASE WHEN @joined IS NULL THEN NULL ELSE COALESCE(stripe_profile_flagged_at,@now) END,
+            stripe_profile_grace=CASE WHEN @joined IS NULL THEN 0 ELSE stripe_profile_grace END
+            WHERE id=@id
+            """, new { charges = charges ? 1 : 0, transfers = transfers ? 1 : 0, details = details ? 1 : 0, joined, now, id = owner.Id });
+
+        // Tell the people who manage payouts once, when the details first go wrong.
+        if (joined != null && owner.StripeProfileIssues == null)
+        {
+            string message = owner.StripeProfileGrace != 0
+                ? $"Your Stripe public details show personal contact information to buyers. Update them within {ProfileGracePeriod.Days} days to keep selling."
+                : "Paid sales are paused: your Stripe public details would show personal contact information to buyers. Update them to resume.";
+
+            foreach (string recipient in PayoutManagers(owner))
+                ManagementEndpoints.Notify(_db, recipient, "payout_privacy", message, owner.Id);
+        }
+
+        return owner.Id;
+    }
+
+    private List<string> PayoutManagers(UserRow owner)
+    {
+        return owner.Group
+            ? _db.Query<string>("SELECT user_id FROM group_members WHERE group_id=@id AND role='owner'", new { id = owner.Id }).ToList()
+            : [owner.Id];
+    }
+
+    // The values pre-filled into every creator's Stripe account, and what the privacy check compares against.
+    public static string StatementDescriptor(ForgeOptions options, string publicName)
+    {
+        string name = new string(publicName.ToUpperInvariant().Select(c => char.IsAsciiLetterOrDigit(c) ? c : ' ').ToArray());
+        string descriptor = string.Join(' ', (options.StatementPrefix + " " + name).Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return descriptor.Length > 22 ? descriptor[..22].TrimEnd() : descriptor;
+    }
+
+    // Lists which public details on a connected account differ from MonkeForge's own. A field Stripe left empty shows
+    // buyers nothing and passes; a field missing from the response entirely can't be judged and passes too.
+    public static List<string> ProfileIssues(JsonObject account, ForgeOptions options)
+    {
+        var issues = new List<string>();
+
+        if (!options.PrivacyShieldConfigured)
+            return issues;
+
+        if (account["business_profile"] is JsonObject profile)
+        {
+            // Without a public business name, Stripe falls back to the creator's legal name.
+            if (profile.ContainsKey("name") && string.IsNullOrWhiteSpace(StripeClient.Str(profile["name"])))
+                issues.Add("name");
+
+            string? email = StripeClient.Str(profile["support_email"]);
+
+            if (!string.IsNullOrWhiteSpace(email) && !email.Trim().Equals(options.SupportEmail, StringComparison.OrdinalIgnoreCase))
+                issues.Add("support_email");
+
+            string? phone = StripeClient.Str(profile["support_phone"]);
+
+            if (!string.IsNullOrWhiteSpace(phone) && !SamePhone(phone, options.SupportPhone!))
+                issues.Add("support_phone");
+
+            if (profile["support_address"] is JsonObject address && !SameAddress(address, options.SupportAddress!))
+                issues.Add("support_address");
+        }
+
+        if (account["settings"]?["payments"] is JsonObject payments && payments.ContainsKey("statement_descriptor"))
+        {
+            // An empty descriptor makes Stripe fall back to the business or legal name on bank statements.
+            string descriptor = (StripeClient.Str(payments["statement_descriptor"]) ?? "").Trim().ToUpperInvariant();
+
+            if (!descriptor.StartsWith(options.StatementPrefix, StringComparison.Ordinal))
+                issues.Add("statement_descriptor");
+        }
+
+        return issues;
+    }
+
+    // Stripe stores numbers as +15125550123 while people type (512) 555-0123, so only the digits are compared,
+    // allowing for a country code on one side and not the other.
+    private static bool SamePhone(string a, string b)
+    {
+        string x = new string(a.Where(char.IsAsciiDigit).ToArray());
+        string y = new string(b.Where(char.IsAsciiDigit).ToArray());
+
+        if (x.Length < 7 || y.Length < 7)
+            return x == y;
+
+        return x.EndsWith(y, StringComparison.Ordinal) || y.EndsWith(x, StringComparison.Ordinal);
+    }
+
+    // An address with nothing in it shows buyers nothing. Otherwise every line must be MonkeForge's. The state is left out
+    // because Stripe may store "Texas" as "TX".
+    private static bool SameAddress(JsonObject address, SupportAddress ours)
+    {
+        string Norm(string? value) => string.Join(' ', (value ?? "").ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+        string[] keys = ["line1", "line2", "city", "postal_code", "country", "state"];
+
+        if (keys.All(k => Norm(StripeClient.Str(address[k])) == ""))
+            return true;
+
+        return Norm(StripeClient.Str(address["line1"])) == Norm(ours.Line1)
+            && Norm(StripeClient.Str(address["line2"])) == Norm(ours.Line2)
+            && Norm(StripeClient.Str(address["city"])) == Norm(ours.City)
+            && Norm(StripeClient.Str(address["postal_code"])) == Norm(ours.PostalCode)
+            && Norm(StripeClient.Str(address["country"])) == Norm(ours.Country);
     }
 
     public PaymentRow? Get(string id)
@@ -210,20 +346,20 @@ public sealed class Payments
         ReceiptItem item = Describe(payment);
         string total = Money(payment.AmountCents, payment.Currency);
         string date = DateTime.UtcNow.ToString("d MMMM yyyy", CultureInfo.InvariantCulture);
-        string seller = item.Seller == null ? "" : $"<tr><td style=\"color:#6b7280;padding:4px 16px 4px 0\">Sold by</td><td>{Mailer.Encode(item.Seller)} via {Mailer.Encode(_options.BrandName)}</td></tr>";
+        string seller = item.Seller == null ? "" : $"<tr><td style=\"color:#9b9ea6;padding:4px 16px 4px 0\">Sold by</td><td>{Mailer.Encode(item.Seller)} via {Mailer.Encode(_options.BrandName)}</td></tr>";
         string renewal = payment.Kind == "subscription"
-            ? "<p style=\"margin:12px 0 0;color:#6b7280;font-size:14px\">This membership renews every month until you cancel it from your purchases page.</p>" : "";
+            ? "<p style=\"margin:12px 0 0;color:#9b9ea6;font-size:14px\">This membership renews every month until you cancel it from your purchases page.</p>" : "";
         string html = $"""
             <p style="margin:0 0 16px">Thanks for your payment. Here's your receipt.</p>
             <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;font-size:14px;border-collapse:collapse">
-            <tr><td style="color:#6b7280;padding:4px 16px 4px 0">Item</td><td>{Mailer.Encode(item.Line)}</td></tr>
+            <tr><td style="color:#9b9ea6;padding:4px 16px 4px 0">Item</td><td>{Mailer.Encode(item.Line)}</td></tr>
             {seller}
-            <tr><td style="color:#6b7280;padding:4px 16px 4px 0">Date</td><td>{date}</td></tr>
-            <tr><td style="color:#6b7280;padding:4px 16px 4px 0">Reference</td><td style="font-family:monospace;font-size:12px;word-break:break-all">{Mailer.Encode(payment.Id)}</td></tr>
+            <tr><td style="color:#9b9ea6;padding:4px 16px 4px 0">Date</td><td>{date}</td></tr>
+            <tr><td style="color:#9b9ea6;padding:4px 16px 4px 0">Reference</td><td style="font-family:monospace;font-size:12px;word-break:break-all">{Mailer.Encode(payment.Id)}</td></tr>
             <tr><td style="padding:12px 16px 0 0;border-top:1px solid #e5e7eb"><strong>Total paid</strong></td><td style="padding-top:12px;border-top:1px solid #e5e7eb"><strong>{Mailer.Encode(total)}</strong></td></tr>
             </table>
             {renewal}
-            <p style="margin:16px 0 0;color:#6b7280;font-size:14px">Something wrong with this purchase? Open a dispute from your purchases page within 90 days.</p>
+            <p style="margin:16px 0 0;color:#9b9ea6;font-size:14px">Something wrong with this purchase? Open a dispute from your purchases page within 90 days.</p>
             """;
         string text = $"""
             Thanks for your payment. Here's your receipt.
@@ -254,7 +390,7 @@ public sealed class Payments
         string html = $"""
             <p style="margin:0 0 12px">We've refunded <strong>{Mailer.Encode(total)}</strong> for {Mailer.Encode(item.Line)}.</p>
             <p style="margin:0 0 12px">Refunds usually reach your card within 5–10 business days, depending on your bank.</p>
-            <p style="margin:0;color:#6b7280;font-size:14px">Reference: <span style="font-family:monospace">{Mailer.Encode(payment.Id)}</span></p>
+            <p style="margin:0;color:#9b9ea6;font-size:14px">Reference: <span style="font-family:monospace">{Mailer.Encode(payment.Id)}</span></p>
             """;
         string text = $"We've refunded {total} for {item.Line}.\n\nRefunds usually reach your card within 5–10 business days, depending on your bank.\n\nReference: {payment.Id}";
         _mailer.Enqueue(to, subject, text, _mailer.Layout(subject, html), MailKinds.Receipt, payment.BuyerId);

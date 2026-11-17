@@ -168,8 +168,11 @@ public sealed class StripeClient
             form.Add(new("branding_settings[logo][url]", options.StripeBrandLogoUrl));
         }
 
+        // With the privacy shield on, creators' statement descriptors start with the site's prefix, so buyers aren't told to look for the creator.
         if (sellerName != null)
-            form.Add(new("custom_text[submit][message]", $"You're paying {sellerName} through {options.BrandName}. The charge appears on your statement under their name."));
+            form.Add(new("custom_text[submit][message]", options.PrivacyShieldConfigured
+                ? $"You're paying {sellerName} through {options.BrandName}. The charge appears on your statement as {Payments.StatementDescriptor(options, sellerName)}."
+                : $"You're paying {sellerName} through {options.BrandName}. The charge appears on your statement under their name."));
     }
 
     public static string? Str(JsonNode? node)

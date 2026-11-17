@@ -23,6 +23,14 @@ ForgeOptions options = ForgeOptions.Load(builder.Configuration, builder.Environm
 Schema.Migrate(options);
 
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.Limits.MaxRequestBodySize = ForgeOptions.MaxRequestBytes);
+
+// The admin panel gets a listener of its own next to the site's usual URLs (ASPNETCORE_URLS, --urls or launchSettings).
+if (options.AdminPortEnabled)
+{
+    string urls = builder.Configuration["urls"] ?? builder.Configuration["http_ports"]?.Split(';').Select(port => "http://*:" + port).Aggregate((a, b) => a + ";" + b) ?? "http://localhost:5000";
+    string bind = options.AdminBind is "*" or "0.0.0.0" or "+" ? "*" : options.AdminBind.Contains(':') && !options.AdminBind.StartsWith('[') ? "[" + options.AdminBind + "]" : options.AdminBind;
+    builder.WebHost.UseUrls(urls + ";http://" + bind + ":" + options.AdminPort);
+}
 builder.Services.Configure<FormOptions>(form =>
 {
     form.MultipartBodyLengthLimit = ForgeOptions.MaxRequestBytes;
@@ -46,6 +54,7 @@ builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<Shell>();
 builder.Services.AddSingleton<MarkdownRenderer>();
+builder.Services.AddSingleton<DocsStore>();
 builder.Services.AddSingleton<Diagnostics>();
 builder.Services.AddSingleton<MonkeShield>();
 builder.Services.AddSingleton<GitHubReleases>();
@@ -54,6 +63,9 @@ builder.Services.AddSingleton<StripeClient>();
 builder.Services.AddSingleton<MailSignal>();
 builder.Services.AddSingleton<AuthThrottle>();
 builder.Services.AddSingleton<Passkeys>();
+builder.Services.AddSingleton<SupportSignal>();
+builder.Services.AddSingleton<EmailPreviews>();
+builder.Services.AddSingleton<AdminShell>();
 builder.Services.AddScoped<Db>();
 builder.Services.AddScoped<ForgeContext>();
 builder.Services.AddScoped<Access>();
@@ -66,8 +78,11 @@ builder.Services.AddScoped<Payments>();
 builder.Services.AddScoped<Subscriptions>();
 builder.Services.AddScoped<Seo>();
 builder.Services.AddScoped<Mailer>();
+builder.Services.AddScoped<SupportDesk>();
 builder.Services.AddHostedService<MonkeShieldBackfill>();
 builder.Services.AddHostedService<MailWorker>();
+builder.Services.AddHostedService<PayoutPrivacySweep>();
+builder.Services.AddHostedService<SupportInbox>();
 
 WebApplication app = builder.Build();
 
@@ -75,6 +90,7 @@ WebApplication app = builder.Build();
 app.Services.GetRequiredService<PayloadVault>();
 
 app.UseForgeErrors();
+app.UseAdminPort(options);
 // Scripts and styles aren't fingerprinted, so browsers must check for a newer copy instead of guessing how long theirs is good for.
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -95,11 +111,16 @@ ChannelEndpoints.Map(app);
 CommunityEndpoints.Map(app);
 ManagementEndpoints.Map(app);
 AdminEndpoints.Map(app);
+AdminPortalEndpoints.Map(app);
+AdminUserEndpoints.Map(app);
+ReviewEndpoints.Map(app);
+TicketEndpoints.Map(app);
 SocialEndpoints.Map(app);
 ToolEndpoints.Map(app);
 StoreEndpoints.Map(app);
 InjectorEndpoints.Map(app);
 SubscriptionEndpoints.Map(app);
+DocsEndpoints.Map(app);
 PageEndpoints.Map(app);
 
 app.Run();

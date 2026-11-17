@@ -1,0 +1,26 @@
+<!--
+ OpenForge is (C) 2026 MonkeForge under the GNU LGPL 3.0.
+ -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Admin · {{brand}}</title>
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="color-scheme" content="dark">
+    <link rel="icon" href="/brand/favicon">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/admin.css">
+    <script id="boot" type="application/json">{{boot}}</script>
+    <script type="module" src="/static/js/admin/main.js"></script>
+</head>
+<body class="admin-body">
+    <div class="admin-shell" id="admin-shell">
+        <aside class="admin-side" id="admin-side" aria-label="Admin navigation"></aside>
+        <main id="app" class="admin-main" tabindex="-1"><div class="page-loading" role="status"><span class="spinner" aria-hidden="true"></span>Loading…</div></main>
+    </div>
+    <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

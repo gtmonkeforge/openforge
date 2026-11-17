@@ -37,8 +37,12 @@ public static class Pipeline
             {
                 IHeaderDictionary headers = context.Response.Headers;
                 headers.XContentTypeOptions = "nosniff";
-                headers.XFrameOptions = "DENY";
-                headers.ContentSecurityPolicy = ContentSecurityPolicy;
+                // Email previews set their own, looser policy so the admin panel can frame them.
+                if (!headers.ContainsKey("X-Frame-Options"))
+                    headers.XFrameOptions = "DENY";
+
+                if (!headers.ContainsKey("Content-Security-Policy"))
+                    headers.ContentSecurityPolicy = ContentSecurityPolicy;
 
                 if (!headers.ContainsKey("Referrer-Policy"))
                     headers["Referrer-Policy"] = "strict-origin-when-cross-origin";

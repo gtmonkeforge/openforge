@@ -120,7 +120,7 @@ public static class StoreEndpoints
         return group;
     }
 
-    private static async Task<IResult> PayoutStatusAsync(HttpRequest request, ForgeContext context, Db db, Access access, StripeClient stripe, Payments payments, ForgeOptions options)
+    private static async Task<IResult> PayoutStatusAsync(HttpRequest request, ForgeContext context, Db db, Access access, StripeClient stripe, Payments payments, Subscriptions subscriptions, ForgeOptions options)
     {
         CurrentUser user = context.RequireUser("Sign in to manage payouts.");
         UserRow account = PayoutAccount(request, user, db, access);
@@ -134,6 +134,7 @@ public static class StoreEndpoints
                 JsonObject remote = await stripe.GetAsync("/v1/accounts/" + Uri.EscapeDataString(account.StripeAccountId));
                 payments.SaveAccountState(account.StripeAccountId, remote);
                 account = db.One<UserRow>("SELECT * FROM users WHERE id=@id", new { id = account.Id })!;
+                await subscriptions.SyncCollectionAsync(account.Id);
             }
             catch (ApiException)
             {
@@ -160,12 +161,38 @@ public static class StoreEndpoints
             connected = account.StripeAccountId != null,
             details_submitted = account.StripeDetailsSubmitted != 0,
             charges_enabled = account.StripeChargesEnabled != 0,
+            can_sell = Payments.CanSell(account),
+            privacy = PrivacyStatus(options, account),
             donations_enabled = account.StripeTransfersEnabled != 0,
             fee_percent = ForgeOptions.PlatformFeePercent,
             currency = options.Currency,
             totals = new { sales_cents = totals.Sales, fees_cents = totals.Fees, earnings_cents = totals.Sales - totals.Fees, donations_cents = totals.Donations },
             recent = recent.Select(r => new { kind = r.Kind, guid = r.Guid, name = r.Name, amount_cents = r.AmountCents, fee_cents = r.FeeCents, currency = r.Currency, status = r.Status, created_at = r.CreatedAt }),
         });
+    }
+
+    // What the payouts page needs to tell a creator their public Stripe details expose them, and exactly what to enter instead.
+    private static object? PrivacyStatus(ForgeOptions options, UserRow account)
+    {
+        if (!options.PrivacyShieldConfigured)
+            return null;
+
+        SupportAddress address = options.SupportAddress!;
+        DateTime? graceEnds = Payments.GraceEndsAt(account);
+
+        return new
+        {
+            issues = account.StripeProfileIssues?.Split(',') ?? [],
+            grace_ends_at = graceEnds?.ToString("yyyy-MM-dd'T'HH:mm:ss'+00:00'", CultureInfo.InvariantCulture),
+            expected = new
+            {
+                name = account.PublicName,
+                support_email = options.SupportEmail,
+                support_phone = options.SupportPhone,
+                support_address = string.Join(", ", new[] { address.Line1, address.Line2, address.City, address.State, address.PostalCode, address.Country }.Where(p => p != null)),
+                statement_descriptor = Payments.StatementDescriptor(options, account.PublicName),
+            },
+        };
     }
 
     private static async Task<IResult> OnboardAsync(HttpRequest request, ForgeContext context, Db db, Access access, StripeClient stripe, ForgeOptions options)
@@ -177,8 +204,14 @@ public static class StoreEndpoints
 
         if (stripeId == null)
         {
-            // Make a unique stripe key so you don't get the same errored response if one failed
-            JsonObject created = await stripe.PostAsync("/v1/accounts",
+            // Buyers see this account's public details on receipts and statements, so new creators get MonkeForge's own
+            // support contact and their public handle instead of personal details. Payouts can't start without it.
+            if (!options.PrivacyShieldConfigured)
+                throw new ApiException(503, "Payouts aren't available yet. The site owner needs to set the support contact that Stripe shows buyers.");
+
+            // A full-dashboard account that pays its own Stripe fees: the creator owns the relationship with Stripe,
+            // handles refunds and disputes on their own sales, and MonkeForge never sees their bank or identity details.
+            List<KeyValuePair<string, string>> form =
             [
                 new("controller[stripe_dashboard][type]", "full"),
                 new("controller[fees][payer]", "account"),
@@ -187,11 +220,20 @@ public static class StoreEndpoints
                 new("capabilities[card_payments][requested]", "true"),
                 new("capabilities[transfers][requested]", "true"),
                 new("metadata[monkeforge_account]", account.Id),
-            ], idempotencyKey: "monkeforge-account-" + account.Id + "-" + DateTime.UtcNow.ToString("yyyyMMddHH", CultureInfo.InvariantCulture));
+                .. PublicProfileFields(options, account),
+            ];
+
+            // Make a unique stripe key so you don't get the same errored response if one failed. Stripe replays a saved
+            // response, errors included, for 24 hours, so the key changes every hour. "v2" marks the pre-filled form,
+            // since Stripe refuses a reused key with different fields.
+            JsonObject created = await stripe.PostAsync("/v1/accounts", form,
+                idempotencyKey: "monkeforge-account-v2-" + account.Id + "-" + DateTime.UtcNow.ToString("yyyyMMddHH", CultureInfo.InvariantCulture));
 
             stripeId = StripeClient.Str(created["id"]) ?? throw new ApiException(502, "The payment provider returned an unexpected response.");
 
-            int updated = db.Exec("UPDATE users SET stripe_account_id=@stripeId WHERE id=@id AND stripe_account_id IS NULL", new { stripeId, id = account.Id });
+            // The account starts with MonkeForge's details, so it gets no grace period if they're later changed.
+            int updated = db.Exec("UPDATE users SET stripe_account_id=@stripeId,stripe_profile_grace=0,stripe_profile_issues=NULL,stripe_profile_flagged_at=NULL WHERE id=@id AND stripe_account_id IS NULL",
+                new { stripeId, id = account.Id });
 
             if (updated == 0)
                 stripeId = db.One<string>("SELECT stripe_account_id FROM users WHERE id=@id", new { id = account.Id })!;
@@ -209,6 +251,42 @@ public static class StoreEndpoints
         ]);
 
         return Api.Json(new { url = StripeClient.Str(link["url"]) });
+    }
+
+    // MonkeForge's support contact and the creator's public handle, in Stripe's account form fields.
+    private static List<KeyValuePair<string, string>> PublicProfileFields(ForgeOptions options, UserRow account)
+    {
+        SupportAddress address = options.SupportAddress!;
+        var fields = new List<KeyValuePair<string, string>>
+        {
+            new("business_profile[name]", account.PublicName),
+            new("business_profile[support_email]", options.SupportEmail!),
+            new("business_profile[support_phone]", options.SupportPhone!),
+            new("business_profile[support_address][line1]", address.Line1!),
+            new("business_profile[support_address][city]", address.City!),
+            new("business_profile[support_address][postal_code]", address.PostalCode!),
+            new("business_profile[support_address][country]", address.Country!),
+            // 5815 is digital goods: media. Pre-filling it and a description saves creators questions they can't easily answer.
+            new("business_profile[mcc]", "5815"),
+            new("business_profile[product_description]", $"Game mods and add-ons sold through {options.BrandName}."),
+            new("settings[payments][statement_descriptor]", Payments.StatementDescriptor(options, account.PublicName)),
+        };
+
+        if (address.Line2 != null)
+            fields.Add(new("business_profile[support_address][line2]", address.Line2));
+
+        if (address.State != null)
+            fields.Add(new("business_profile[support_address][state]", address.State));
+
+        // Stripe rejects URLs it can't reach, which rules out local development addresses.
+        if (Uri.TryCreate(options.PublicUrl, UriKind.Absolute, out Uri? site) && site.Scheme == "https" && !site.IsLoopback)
+            fields.Add(new("business_profile[url]", options.PublicUrl + "/profile/" + Uri.EscapeDataString(account.Id)));
+
+        // Individual is right for almost every creator. Groups are left for Stripe to ask about.
+        if (!account.Group)
+            fields.Add(new("business_type", "individual"));
+
+        return fields;
     }
 
     private static async Task<IResult> SetPricingAsync(string value, HttpRequest request, ForgeContext context, Access access, Db db, Payments payments, Storage storage, PayloadVault vault)
@@ -526,6 +604,7 @@ public static class StoreEndpoints
         }
 
         string? stopAfterCommit = null;
+        string? syncAfterCommit = null;
 
         PaymentRow? ByIntent(string? intent)
         {
@@ -612,13 +691,16 @@ public static class StoreEndpoints
                 string? accountId = StripeClient.Str(obj["id"]);
 
                 if (accountId != null)
-                    payments.SaveAccountState(accountId, obj);
+                    syncAfterCommit = payments.SaveAccountState(accountId, obj);
 
                 break;
             }
         }
 
         db.Commit();
+
+        if (syncAfterCommit != null)
+            await subscriptions.SyncCollectionAsync(syncAfterCommit);
 
         if (stopAfterCommit != null && subscriptions.Get(stopAfterCommit) is { } disputed)
         {

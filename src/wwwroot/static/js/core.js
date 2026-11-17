@@ -67,6 +67,18 @@ const paths = {
     discord: '<path d="M8.5 7.5a13 13 0 0 1 7 0M8 17c-2 1-4 0-4 0-.5-4 .5-8 2.5-10.5L8.5 6M16 17c2 1 4 0 4 0 .5-4-.5-8-2.5-10.5L15.5 6M7.5 15.5c3 1.5 6 1.5 9 0"/><circle cx="9.5" cy="12" r="1"/><circle cx="14.5" cy="12" r="1"/>',
     tag: '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8a1.4 1.4 0 0 1 0 2l-7 7a1.4 1.4 0 0 1-2 0Z"/><circle cx="8" cy="8" r="1.4"/>',
     wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3"/><rect x="4" y="8" width="16.5" height="11" rx="2.5"/><path d="M16 13.5h.01"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/>',
+    send: '<path d="M21 3 10 14M21 3l-7 18-4-7-7-4Z"/>',
+    paperclip: '<path d="m20 11.5-8.2 8.2a5 5 0 0 1-7-7L13 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.3 8.2a1.7 1.7 0 0 1-2.3-2.3l7.6-7.6"/>',
+    note: '<path d="M5 4h14v11l-5 5H5Z"/><path d="M14 20v-5h5M8.5 9h7M8.5 12.5h4"/>',
+    dashboard: '<rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/>',
+    reply: '<path d="M9 7 4 12l5 5"/><path d="M4 12h10a6 6 0 0 1 6 6v1"/>',
+    refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7L20 8.5M20 4v4.5h-4.5"/>',
+    more: '<circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/>',
+    history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5M3.5 4v4.5H8"/><path d="M12 7.5V12l3 2"/>',
+    flag: '<path d="M5 21V4m0 0h11l-2 4 2 4H5"/>',
+    ban: '<circle cx="12" cy="12" r="8.5"/><path d="m6 6 12 12"/>',
+    megaphone: '<path d="M4 10v4a1 1 0 0 0 1 1h2l8 4V5L7 9H5a1 1 0 0 0-1 1ZM18 9.5a3.5 3.5 0 0 1 0 5M7 15l1.5 5h2.5L10 15.5"/>',
     tray: '<path d="M3 13h5l1.5 2.5h5L16 13h5M5 5h14l2 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z"/>',
 };
 

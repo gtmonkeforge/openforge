@@ -15,7 +15,7 @@ public sealed class Access
 
     public UserRow? ResolveUser(string value)
     {
-        return _db.One<UserRow>("SELECT * FROM users WHERE id=@value OR (custom_slug=@value AND is_verified=1)", new { value });
+        return _db.One<UserRow>("SELECT * FROM users WHERE (id=@value OR (custom_slug=@value AND is_verified=1)) AND deleted_at IS NULL", new { value });
     }
 
     public ModRow? ResolveMod(string value)

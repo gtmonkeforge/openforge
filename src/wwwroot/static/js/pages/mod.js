@@ -27,7 +27,7 @@ export async function render(id) {
 
     app.innerHTML = `
         <a class="breadcrumb" href="/browse">${icon('back')}All mods</a>
-        ${mod.status !== 'approved' ? `<p class="notice">${mod.status === 'pending' ? 'This mod is awaiting review before it becomes publicly available.' : 'This mod is not publicly available.'}</p>` : ''}
+        ${mod.status !== 'approved' ? `<div class="notice" id="review-notice">${mod.status === 'pending' ? 'This mod is awaiting review before it becomes publicly available.' : 'This mod is not publicly available.'}</div>` : ''}
         ${mod.banner ? `<div class="mod-banner"><img src="${esc(mod.banner)}" alt=""></div>` : ''}
         <section class="mod-hero surface">
             ${modIcon(mod)}
@@ -109,6 +109,9 @@ export async function render(id) {
                 </div></section>` : ''}
             </aside>
         </div>`;
+
+    if (owner && mod.status !== 'approved')
+        reviewNotice(mod);
 
     app.querySelectorAll('.markdown a').forEach(a => {
         a.target = '_blank';
@@ -547,4 +550,35 @@ async function community(mod, base) {
     }
 
     await Promise.all([ratings(), comments()]).catch(error => toast(error.message, 'error'));
+}
+
+// Owners see why staff didn't approve the mod, and can send it back for review once it's fixed.
+async function reviewNotice(mod) {
+    const box = app.querySelector('#review-notice');
+
+    try {
+        const review = await api('/api/v1/mods/' + encodeURIComponent(mod.guid) + '/review');
+
+        if (!box || review.status !== 'unapproved')
+            return;
+
+        const reason = review.latest?.decision === 'denied' ? review.latest.reason : '';
+        box.innerHTML = `<strong>Staff couldn’t approve this mod yet.</strong>${reason ? `<p class="dispute-reason">${esc(reason)}</p>` : ''}
+            <p class="hint">Make the changes, then resubmit. Publishing a new release resubmits it too.</p>
+            ${review.can_resubmit ? `<div class="row"><input class="grow" id="resubmit-note" maxlength="1000" placeholder="What did you change? (optional)" aria-label="Note for reviewers"><button class="button small" id="resubmit">${icon('upload')}Resubmit for review</button></div>` : ''}`;
+
+        box.querySelector('#resubmit')?.addEventListener('click', async event => {
+            event.currentTarget.disabled = true;
+
+            try {
+                await api('/api/v1/mods/' + encodeURIComponent(mod.guid) + '/resubmit', { method: 'POST', json: { note: box.querySelector('#resubmit-note').value } });
+                box.textContent = 'Resubmitted. This mod is awaiting review before it becomes publicly available.';
+                toast('Sent back for review.');
+            } catch (error) {
+                toast(error.message, 'error');
+                event.currentTarget.disabled = false;
+            }
+        });
+    } catch {
+    }
 }
