@@ -31,9 +31,6 @@ public static partial class Text
         """.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToHashSet();
 
     // Patterns use \A and \z because .NET's $ also matches before a trailing newline.
-    [GeneratedRegex(@"\A[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*){2,}\z")]
-    public static partial Regex Guid();
-
     [GeneratedRegex(@"\A[0-9][a-zA-Z0-9.+_-]{0,63}\z")]
     public static partial Regex Version();
 
@@ -64,6 +61,12 @@ public static partial class Text
 
     [GeneratedRegex(@"[^A-Za-z0-9_.-]")]
     private static partial Regex UnsafeFilenameChars();
+    // GUIDs are free-form (staff review them), but each one is a path segment in /view/{guid} and the API.
+    public static bool UsableGuid(string guid)
+    {
+        return guid.Length is > 0 and <= 200 && guid.Trim() == guid && !guid.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c is '/' or '\\' or '?' or '#' or '%');
+    }
+
     public static int Len(string value)
     {
         return value.EnumerateRunes().Count();

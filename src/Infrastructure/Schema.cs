@@ -138,6 +138,12 @@ public static class Schema
         MigrateStore(db);
         MigrateAccounts(db);
         MigrateAdmin(db);
+
+        // Servers that already had a root administrator were set up by hand, so they never see the setup wizard.
+        db.Execute("CREATE TABLE IF NOT EXISTS server_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+
+        if (options.RootAdminId != "")
+            db.Execute("INSERT OR IGNORE INTO server_state(key,value) VALUES('setup_completed',@now)", new { now = Text.NowIso() });
     }
 
     private static void MigrateAdmin(SqliteConnection db)

@@ -9,9 +9,17 @@ const quickReasons = [
     ['Scan failed', 'MonkeShield flagged code in this release that needs explaining or removing. See the failing checks, then publish a fixed release.'],
     ['Source', 'Add a link to the source code so staff and users can see what the mod does.'],
     ['Duplicate', 'This looks like a copy of an existing mod. If it’s yours, update the original listing instead; if it isn’t, you need the author’s permission.'],
+    ['GUID', 'The GUID doesn’t identify this mod clearly. Use one that’s unique to you and the mod, usually com.yourname.modname, and matches the GUID in your plugin. A mod’s GUID can’t be changed, so publish again under the corrected one.'],
     ['Wrong category', 'Choose the category that matches what this mod does.'],
     ['Rules', 'This mod breaks the rules for what can be listed. Check the Terms of Service before resubmitting.'],
 ];
+
+// GUIDs are free-form now, so the conventional reverse-domain shape is only a hint for reviewers.
+const conventional = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){2,}$/i;
+
+function guidPill(guid) {
+    return conventional.test(guid) ? '' : '<span class="pill warn" title="Not in the usual com.author.mod form. Check it identifies this mod and matches its plugin.">Unusual GUID</span>';
+}
 
 export async function render(ctx) {
     if (ctx.rest)
@@ -42,7 +50,7 @@ async function queue({ app, params, alive }) {
         </div><span class="spacer"></span><span class="hint">${status === 'pending' ? 'Oldest first.' : 'Waiting on their authors to resubmit.'}</span></div>
         <div class="queue">${data.items.map(m => `<a class="queue-item" href="/admin/reviews/${encodeURIComponent(m.guid)}">
             ${modIcon(m)}
-            <div><h3>${esc(m.name)}</h3><div class="meta"><span>by ${esc(m.author.name)}</span>${m.author.is_verified ? '<span class="pill good">Verified author</span>' : ''}<span class="mono">v${esc(m.version)}</span><span>${esc(m.category)}</span>${m.paid ? '<span class="pill accent">Paid</span>' : ''}${m.denials ? `<span class="pill warn">${m.denials} earlier denial${m.denials === 1 ? '' : 's'}</span>` : ''}</div></div>
+            <div><h3>${esc(m.name)}</h3><div class="meta"><span>by ${esc(m.author.name)}</span>${m.author.is_verified ? '<span class="pill good">Verified author</span>' : ''}<span class="mono">${esc(m.guid)}</span>${guidPill(m.guid)}<span class="mono">v${esc(m.version)}</span><span>${esc(m.category)}</span>${m.paid ? '<span class="pill accent">Paid</span>' : ''}${m.denials ? `<span class="pill warn">${m.denials} earlier denial${m.denials === 1 ? '' : 's'}</span>` : ''}</div></div>
             ${shieldPill(m.shield)}
             <span class="age" title="${esc(m.submitted_at)}">${esc(ago(m.submitted_at))}</span>
         </a>`).join('') || `<div class="empty"><h2>${status === 'pending' ? 'Queue is clear' : 'Nothing denied'}</h2><p>${status === 'pending' ? 'New submissions and edited mods show up here.' : 'Mods you deny appear here until their authors resubmit.'}</p></div>`}</div>`;
@@ -66,7 +74,7 @@ function modPage(mod) {
                     ${mod.uses_injector ? `<span class="pill">${icon('lock')}Injector</span>` : ''}
                     ${caps.map(c => `<span class="pill">${esc(capLabels[c])}</span>`).join('')}
                 </div>
-                <p class="hint mono">${esc(mod.guid)} · created ${esc(date(mod.created_at))} · updated ${esc(ago(mod.updated_at))}</p>
+                <p class="hint"><span class="mono">GUID ${esc(mod.guid)}</span> ${guidPill(mod.guid)} · created ${esc(date(mod.created_at))} · updated ${esc(ago(mod.updated_at))}</p>
             </div>
             <div class="hero-actions"><a class="button subtle small" href="${esc(site('/view/' + encodeURIComponent(mod.guid)))}" target="_blank" rel="noopener">${icon('external')}Open on site</a>
                 ${mod.source_url ? `<a class="button subtle small" href="${esc(mod.source_url)}" target="_blank" rel="noopener noreferrer">${icon('github')}Source</a>` : '<span class="pill warn">No source link</span>'}</div>

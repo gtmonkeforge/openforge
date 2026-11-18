@@ -298,7 +298,7 @@ export function applyAccent(color) {
     });
 }
 
-export const signInNext = ['/browse', '/upload', '/profile', '/admin', '/settings'];
+export const signInNext = ['/browse', '/upload', '/profile', '/admin', '/settings', '/setup'];
 
 export function signInUrl(next = location.pathname) {
     return '/login?next=' + encodeURIComponent(signInNext.includes(next) ? next : '/browse');

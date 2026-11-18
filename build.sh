@@ -53,6 +53,11 @@ for target in "${TARGETS[@]}"; do
         --nologo --verbosity quiet
 
     cp "$ROOT/LICENSE" "$ROOT/README.md" "$out/"
+
+    # Linux releases carry the systemd unit and installer.
+    if [[ "$target" == linux-* ]]; then
+        cp "$ROOT/deploy/openforge.service" "$ROOT/deploy/install.sh" "$out/"
+    fi
     find "$out" -name "*.pdb" -delete
 
     # Windows users expect a zip; everything else keeps the executable bit in a tarball.

@@ -137,8 +137,9 @@ public static class PublishEndpoints
         if (name == "" || Text.Len(name) > 100)
             throw ApiException.BadRequest("Name is required and must be 100 characters or fewer.");
 
-        if (!Text.Guid().IsMatch(guid) || guid.Length > 200)
-            throw ApiException.BadRequest("Use a reverse-domain GUID, such as com.yourname.yourmod.");
+        // Any GUID is accepted and staff check it in review. It only has to work as one segment of a URL.
+        if (!Text.UsableGuid(guid))
+            throw ApiException.BadRequest("Enter a GUID of up to 200 characters without spaces or / \\ ? # %.");
 
         if (!Text.Version().IsMatch(version))
             throw ApiException.BadRequest("Use a version such as 1.0.0 (up to 64 characters).");

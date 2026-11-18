@@ -109,6 +109,9 @@ public sealed class ForgeOptions
         var options = new ForgeOptions();
         options.DataDir = Path.GetFullPath(Path.Combine(contentRoot, Get("DataDir", "DATA_DIR") ?? options.DataDir));
         options.PublicUrl = (Get("PublicUrl", "PUBLIC_URL") ?? options.PublicUrl).TrimEnd('/');
+
+        if (!Text.IsWebUrl(options.PublicUrl))
+            throw new InvalidOperationException("PUBLIC_URL must be the site's full http or https address, such as https://monkeforge.org.");
         options.RootAdminId = (Get("RootAdminId", "ROOT_ADMIN_ID") ?? "").Trim();
         options.CookieSecure = Flag("CookieSecure", "COOKIE_SECURE", false);
         options.TrustCountryHeader = Flag("TrustCountryHeader", "TRUST_COUNTRY_HEADER", true);
@@ -250,7 +253,10 @@ public sealed class ForgeOptions
         string? shield = Get("MonkeShieldUrl", "MONKESHIELD_URL");
 
         if (shield != null)
-            options.MonkeShieldUrl = shield.Trim() == "" ? null : shield.Trim();
+            options.MonkeShieldUrl = shield.Trim() is "" or "off" or "none" ? null : shield.Trim();
+
+        if (options.MonkeShieldUrl != null && !Text.IsWebUrl(options.MonkeShieldUrl))
+            throw new InvalidOperationException("MONKESHIELD_URL must be a full http or https URL, or off.");
 
         return options;
     }
@@ -290,24 +296,37 @@ public sealed class ForgeOptions
         return path;
     }
 
+    // The .env file the server reads, which the admin panel edits. Variables set by the real environment (systemd,
+    // Docker, the shell) always win over it; variables that came from the file are replaced on every reload.
+    public static string DotEnvPath { get; private set; } = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+
+    private static HashSet<string>? _external;
+    private static readonly HashSet<string> FromFile = [];
+
+    public static bool IsExternal(string key)
+    {
+        return _external?.Contains(key) ?? Environment.GetEnvironmentVariable(key) != null;
+    }
+
     public static void LoadDotEnv(string path)
     {
-        if (!File.Exists(path))
-            return;
+        DotEnvPath = path;
+        _external ??= Environment.GetEnvironmentVariables().Keys.Cast<string>().ToHashSet();
+        Dictionary<string, string> values = DotEnvFile.Read(path);
 
-        foreach (string line in File.ReadAllLines(path))
+        foreach (string key in FromFile.Where(k => !values.ContainsKey(k)).ToList())
         {
-            string trimmed = line.Trim();
+            Environment.SetEnvironmentVariable(key, null);
+            FromFile.Remove(key);
+        }
 
-            if (trimmed == "" || trimmed.StartsWith('#') || !trimmed.Contains('='))
+        foreach ((string key, string value) in values)
+        {
+            if (_external.Contains(key))
                 continue;
 
-            int index = trimmed.IndexOf('=');
-            string key = trimmed[..index].Trim();
-            string value = trimmed[(index + 1)..].Trim().Trim('"', '\'');
-
-            if (Environment.GetEnvironmentVariable(key) == null)
-                Environment.SetEnvironmentVariable(key, value);
+            Environment.SetEnvironmentVariable(key, value);
+            FromFile.Add(key);
         }
     }
 }

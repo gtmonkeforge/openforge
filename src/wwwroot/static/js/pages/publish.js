@@ -3,7 +3,8 @@ import { fromMinor, storeConfig, toMinor } from '../store.js';
 import { copy, fill } from '../store-copy.js';
 import { tierManager } from '../tiers.js';
 
-const guidPattern = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){2,}$/;
+// Any GUID works; staff review it. It just has to fit in a URL.
+const guidPattern = /^[^\s/\\?#%]{1,200}$/;
 const versionPattern = /^[0-9][a-zA-Z0-9.+_-]{0,63}$/;
 const MB = 1024 * 1024;
 
@@ -52,7 +53,7 @@ export async function render() {
                 <section class="publish-step" data-panel="0">
                     <div class="surface panel">
                         <div class="field"><label for="name">Mod name</label><input id="name" required maxlength="100" placeholder="Your mod’s display name" value="${esc(mod?.name || '')}"></div>
-                        <div class="field"><label for="guid">GUID <span>permanent · reverse-domain</span></label><input id="guid" class="mono-input" required maxlength="200" placeholder="com.yourname.yourmod" value="${esc(mod?.guid || '')}" ${mod ? 'readonly' : ''}><p class="hint">Every release of this mod uses the same GUID.</p></div>
+                        <div class="field"><label for="guid">GUID <span>permanent</span></label><input id="guid" class="mono-input" required maxlength="200" placeholder="com.yourname.yourmod" value="${esc(mod?.guid || '')}" ${mod ? 'readonly' : ''}><p class="hint">Every release of this mod uses the same GUID. Staff check it when they review the mod.</p></div>
                         ${authors.length > 1 ? `<div class="field"><label for="author">Publish as</label><select id="author">${authors.map(a => `<option value="${esc(a.id)}" ${a.id === requested ? 'selected' : ''}>${esc(a.name)}${a.id === auth.user.id ? ' (you)' : ' · group'}</option>`).join('')}</select><p class="hint">Mods published as a group can be updated by every member of the group.</p></div>` : ''}
                         <div class="field" id="slug-field"><label for="slug">Custom URL <span>verified benefit</span></label><div class="row"><span class="hint mono">/view/</span><input id="slug" class="mono-input" maxlength="40" placeholder="your-mod" value="${esc(mod?.custom_slug || '')}">${mod ? '<button type="button" class="button subtle" id="save-slug">Save</button>' : ''}</div></div>
                         <div class="grid-2">
@@ -375,7 +376,7 @@ function validate(mod, form, release) {
     const description = form.querySelector('#description').value.trim();
 
     if (!name || !description || !guidPattern.test(guid))
-        return 'Complete the mod name, a reverse-domain GUID and a description before publishing.';
+        return 'Complete the mod name, a GUID (no spaces or / \\ ? # %) and a description before publishing.';
 
     const images = ['logo', 'banner', 'screenshots'].flatMap(id => [...form.querySelector('#' + id).files]);
 

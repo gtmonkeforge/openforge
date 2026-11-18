@@ -18,6 +18,9 @@ const sections = [
     { path: '/admin/audit', title: 'Audit log', icon: 'history', load: () => import('./ops.js'), view: 'audit' },
     { path: '/admin/errors', title: 'Server errors', icon: 'terminal', load: () => import('./ops.js'), view: 'errors' },
     { path: '/admin/admins', title: 'Administrators', icon: 'admin', load: () => import('./ops.js'), view: 'admins', root: true },
+    { label: 'Server', root: true },
+    { path: '/admin/settings', title: 'Settings', icon: 'settings', load: () => import('./settings.js'), root: true },
+    { path: '/admin/database', title: 'Database', icon: 'database', load: () => import('./database.js'), root: true },
 ];
 
 const side = document.querySelector('#admin-side');

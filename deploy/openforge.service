@@ -1,0 +1,29 @@
+# systemd unit for OpenForge. deploy/install.sh installs it to /etc/systemd/system/openforge.service.
+# The admin panel (Settings → Server) shows a copy filled in for the folder and user a running server uses.
+
+[Unit]
+Description=OpenForge mod server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=openforge
+Group=openforge
+WorkingDirectory=/opt/openforge
+ExecStart=/opt/openforge/OpenForge
+Environment=ASPNETCORE_ENVIRONMENT=Production
+# Settings live in /opt/openforge/.env, which the admin panel and setup wizard edit.
+# Anything set with Environment= here overrides that file and shows as locked in the panel.
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/openforge
+
+[Install]
+WantedBy=multi-user.target

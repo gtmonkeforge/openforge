@@ -19,7 +19,7 @@ public static class AdminPortal
     // What the panel itself needs on the admin port. Reads of mods, docs and media let reviewers see a submission as users would.
     private static readonly string[] AdminPortPrefixes =
     [
-        "/admin", "/api/v1/admin", "/api/v1/session", "/api/v1/logout", "/api/v1/markdown-preview",
+        "/admin", "/api/v1/admin", "/api/v1/session", "/api/v1/logout", "/api/v1/markdown-preview", "/setup", "/api/v1/setup",
         "/static", "/brand", "/media",
     ];
 
@@ -76,18 +76,20 @@ public static class AdminPortal
 
 public sealed class AdminShell
 {
-    private readonly string _template;
+    private readonly IWebHostEnvironment _environment;
     private readonly ForgeOptions _options;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _templates = new();
 
     public AdminShell(IWebHostEnvironment environment, ForgeOptions options)
     {
+        _environment = environment;
         _options = options;
-        _template = File.ReadAllText(Path.Combine(environment.WebRootPath, "admin.html"))
-            .Replace("{{brand}}", WebUtility.HtmlEncode(options.BrandName));
     }
 
-    public IResult Page()
+    public IResult Page(string file = "admin.html")
     {
+        string template = _templates.GetOrAdd(file, name => File.ReadAllText(Path.Combine(_environment.WebRootPath, name)).Replace("{{brand}}", WebUtility.HtmlEncode(_options.BrandName)));
+
         var boot = new
         {
             brand = new { name = _options.BrandName, game = _options.BrandGame, tint_favicon = _options.BrandLogo == null && _options.BrandFavicon == null },
@@ -99,7 +101,7 @@ public sealed class AdminShell
             stripe_configured = _options.StripeConfigured,
         };
 
-        string html = _template.Replace("{{boot}}", JsonSerializer.Serialize(boot));
+        string html = template.Replace("{{boot}}", JsonSerializer.Serialize(boot));
         return Results.Content(html, "text/html; charset=utf-8");
     }
 }
