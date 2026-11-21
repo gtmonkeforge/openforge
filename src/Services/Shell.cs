@@ -62,6 +62,8 @@ public sealed class Shell
 
         context.Response.StatusCode = status;
         context.Response.ContentType = "text/html; charset=utf-8";
+        // Pages name their scripts and styles, so a stale copy would keep loading old code after an update.
+        context.Response.Headers.CacheControl = "no-cache";
         await context.Response.WriteAsync(html);
     }
 

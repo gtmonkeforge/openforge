@@ -102,6 +102,24 @@ public sealed class AdminShell
         };
 
         string html = template.Replace("{{boot}}", JsonSerializer.Serialize(boot));
-        return Results.Content(html, "text/html; charset=utf-8");
+        return new HtmlPage(html);
+    }
+
+    // Pages name their scripts and styles, so a stale copy would keep loading old code after an update.
+    private sealed class HtmlPage : IResult
+    {
+        private readonly string _html;
+
+        public HtmlPage(string html)
+        {
+            _html = html;
+        }
+
+        public Task ExecuteAsync(HttpContext httpContext)
+        {
+            httpContext.Response.ContentType = "text/html; charset=utf-8";
+            httpContext.Response.Headers.CacheControl = "no-cache";
+            return httpContext.Response.WriteAsync(_html);
+        }
     }
 }
