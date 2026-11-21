@@ -203,6 +203,9 @@ public static class SubscriptionEndpoints
         {
             if (!db.Exists("SELECT 1 FROM mods WHERE guid=@guid AND author_id=@ownerId AND status!='deleted' AND visibility='public'", new { guid, ownerId }))
                 throw ApiException.BadRequest("Creator tiers can only include your own public mods.");
+
+            if (ExtensionEndpoints.IsExtension(db, guid))
+                throw ApiException.BadRequest("Extensions are always free, so creator tiers can't include them.");
         }
 
         db.Exec("DELETE FROM tier_mods WHERE tier_id=@tierId", new { tierId });
@@ -234,6 +237,9 @@ public static class SubscriptionEndpoints
 
             if (input.Mods is { Count: > 0 })
                 throw ApiException.BadRequest("Mod tiers always unlock their own mod. Use a creator tier to bundle several mods.");
+
+            if (ExtensionEndpoints.IsExtension(db, mod.Guid))
+                throw ApiException.Conflict("Extensions are always free, so they can't have paid tiers.");
 
             if (mod.Visibility != "public")
                 throw ApiException.Conflict("Make this mod public before adding paid tiers.");

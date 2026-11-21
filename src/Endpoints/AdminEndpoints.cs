@@ -24,6 +24,7 @@ public static class AdminEndpoints
         public string Username { get; set; } = "";
         public string DisplayName { get; set; } = "";
         public int IsAdmin { get; set; }
+        public int IsDeveloper { get; set; }
         public int IsVerified { get; set; }
         public int IsBanned { get; set; }
         public long ModCount { get; set; }
@@ -45,12 +46,17 @@ public static class AdminEndpoints
         app.MapPatch("/api/v1/admin/mods/{guid}", ModerateAsync);
         app.MapDelete("/api/v1/admin/mods/{guid}", PermanentlyDelete);
         app.MapPut("/api/v1/admin/mods/{guid}/choice", ElectChoiceAsync);
+        app.MapDelete("/api/v1/admin/mods/{guid}/choice", RemoveChoice);
+        app.MapPost("/api/v1/admin/mods/{guid}/medals", AddMedalAsync);
+        app.MapPatch("/api/v1/admin/mods/{guid}/medals/{id:long}", RenameMedalAsync);
+        app.MapDelete("/api/v1/admin/mods/{guid}/medals/{id:long}", RemoveMedal);
         app.MapGet("/api/v1/admin/mods/{guid}/comments", Comments);
         app.MapPost("/api/v1/admin/mods/{guid}/comments", AddCommentAsync);
         app.MapGet("/api/v1/admin/users", (HttpRequest request, ForgeContext context, Db db, ForgeOptions options) => Users(request, context, db, options, false));
         app.MapGet("/api/v1/admin/admins", (HttpRequest request, ForgeContext context, Db db, ForgeOptions options) => Users(request, context, db, options, true));
         app.MapPatch("/api/v1/admin/users/{uid}", ManageUserAsync);
         app.MapPut("/api/v1/admin/admins/{uid}", ManageAdminAsync);
+        app.MapPut("/api/v1/admin/developers/{uid}", ManageDeveloperAsync);
         app.MapGet("/api/v1/admin/analytics", Analytics);
         app.MapGet("/api/v1/admin/errors", Errors);
     }
@@ -143,9 +149,12 @@ public static class AdminEndpoints
 
         db.Exec("DELETE FROM files WHERE release_id IN (SELECT id FROM releases WHERE guid=@guid)", new { guid });
 
-        foreach (string table in new[] { "monkeshield_reports", "channel_share_codes", "releases", "release_channels", "mod_comments", "mod_ratings", "admin_comments", "activity", "mod_transfers" })
+        foreach (string table in new[] { "monkeshield_reports", "channel_share_codes", "releases", "release_channels", "mod_medals", "mod_comments", "mod_ratings", "admin_comments", "activity", "mod_transfers" })
             db.Exec($"DELETE FROM {table} WHERE guid=@guid", new { guid });
 
+        // Extensions of a deleted mod stay up as ordinary mods.
+        db.Exec("DELETE FROM mod_extensions WHERE guid=@guid OR parent_guid=@guid", new { guid });
+        db.Exec("DELETE FROM mod_docs WHERE guid=@guid", new { guid });
         db.Exec("DELETE FROM admin_audit WHERE target=@guid AND action LIKE 'mod.%'", new { guid });
         db.Exec("DELETE FROM mods WHERE guid=@guid", new { guid });
         db.Commit();
@@ -153,28 +162,109 @@ public static class AdminEndpoints
         return Api.Json(new { guid, deleted = true });
     }
 
+    public const int ChoiceNoteLimit = 1000;
+
+    // Modder's Choice is one badge any number of mods can hold. The note is staff's reason, shown on the mod page.
     private static async Task<IResult> ElectChoiceAsync(string guid, HttpRequest request, ForgeContext context, Db db)
     {
         CurrentUser actor = RequireAdmin(context);
         JsonObject? payload = await JsonBody.ReadObjectAsync(request);
-        string? category = null;
+        string note = "";
 
-        bool valid = payload != null && payload.HasExactly("category")
-            && (payload["category"] == null || (payload["category"].IsString(out string chosen) && Text.Categories.Contains(category = chosen)));
+        bool valid = payload != null && payload.HasOnly("note")
+            && (payload["note"] == null || payload["note"].IsString(out note));
 
         if (!valid)
-            throw ApiException.BadRequest("Choose a category or null to remove the badge.");
+            throw ApiException.BadRequest("Send an optional note explaining why this is Modder's Choice.");
+
+        note = (note ?? "").Trim();
+
+        if (Text.Len(note) > ChoiceNoteLimit)
+            throw ApiException.BadRequest($"Keep the note to {ChoiceNoteLimit:N0} characters.");
 
         db.BeginImmediate();
 
         if (!db.Exists("SELECT 1 FROM mods WHERE guid=@guid AND status!='deleted'", new { guid }))
             throw new ApiException(404);
 
-        if (category != null)
-            db.Exec("UPDATE mods SET choice_category=NULL WHERE choice_category=@category", new { category });
-
-        db.Exec("UPDATE mods SET choice_category=@category WHERE guid=@guid", new { category, guid });
+        db.Exec("UPDATE mods SET is_choice=1,choice_note=@note WHERE guid=@guid", new { note = note == "" ? null : note, guid });
         Audit(db, actor, "mod.choice", guid);
+        db.Commit();
+
+        return Api.Ok();
+    }
+
+    private static IResult RemoveChoice(string guid, ForgeContext context, Db db)
+    {
+        CurrentUser actor = RequireAdmin(context);
+        db.BeginImmediate();
+
+        if (!db.Exists("SELECT 1 FROM mods WHERE guid=@guid", new { guid }))
+            throw new ApiException(404);
+
+        db.Exec("UPDATE mods SET is_choice=0,choice_note=NULL WHERE guid=@guid", new { guid });
+        Audit(db, actor, "mod.choice.remove", guid);
+        db.Commit();
+
+        return Api.Ok();
+    }
+
+    public const int MedalNameLimit = 80;
+
+    private static async Task<string> MedalNameAsync(HttpRequest request)
+    {
+        JsonObject? payload = await JsonBody.ReadObjectAsync(request);
+
+        if (payload == null || !payload.HasExactly("name") || !payload["name"].IsString(out string name) || (name = name.Trim()) == "")
+            throw ApiException.BadRequest("Name the medal, such as \"#1 Winter Modding Contest\".");
+
+        if (Text.Len(name) > MedalNameLimit)
+            throw ApiException.BadRequest($"Keep the medal name to {MedalNameLimit} characters.");
+
+        return name;
+    }
+
+    private static async Task<IResult> AddMedalAsync(string guid, HttpRequest request, ForgeContext context, Db db)
+    {
+        CurrentUser actor = RequireAdmin(context);
+        string name = await MedalNameAsync(request);
+        db.BeginImmediate();
+
+        if (!db.Exists("SELECT 1 FROM mods WHERE guid=@guid AND status!='deleted'", new { guid }))
+            throw new ApiException(404);
+
+        long id = db.Scalar<long>("INSERT INTO mod_medals(guid,name,created_by,created_at) VALUES(@guid,@name,@actor,@now) RETURNING id",
+            new { guid, name, actor = actor.Id, now = Text.NowIso() });
+        Audit(db, actor, "mod.medal.add", guid);
+        db.Commit();
+
+        return Api.Json(new MedalDto { Id = id, Name = name }, 201);
+    }
+
+    private static async Task<IResult> RenameMedalAsync(string guid, long id, HttpRequest request, ForgeContext context, Db db)
+    {
+        CurrentUser actor = RequireAdmin(context);
+        string name = await MedalNameAsync(request);
+        db.BeginImmediate();
+
+        if (db.Exec("UPDATE mod_medals SET name=@name WHERE id=@id AND guid=@guid", new { name, id, guid }) == 0)
+            throw ApiException.NotFound("Medal not found.");
+
+        Audit(db, actor, "mod.medal.rename", guid);
+        db.Commit();
+
+        return Api.Json(new MedalDto { Id = id, Name = name });
+    }
+
+    private static IResult RemoveMedal(string guid, long id, ForgeContext context, Db db)
+    {
+        CurrentUser actor = RequireAdmin(context);
+        db.BeginImmediate();
+
+        if (db.Exec("DELETE FROM mod_medals WHERE id=@id AND guid=@guid", new { id, guid }) == 0)
+            throw ApiException.NotFound("Medal not found.");
+
+        Audit(db, actor, "mod.medal.remove", guid);
         db.Commit();
 
         return Api.Ok();
@@ -243,7 +333,7 @@ public static class AdminEndpoints
 
         long total = db.Scalar<long>("SELECT COUNT(*) FROM users u" + where, parameters);
         List<AdminUserRow> rows = db.Query<AdminUserRow>(
-            "SELECT u.id,u.username,COALESCE(u.public_username,u.display_name) display_name,u.is_admin,u.is_verified,u.is_banned,(SELECT COUNT(*) FROM mods m WHERE m.author_id=u.id AND m.status!='deleted') mod_count FROM users u"
+            "SELECT u.id,u.username,COALESCE(u.public_username,u.display_name) display_name,u.is_admin,u.is_developer,u.is_verified,u.is_banned,(SELECT COUNT(*) FROM mods m WHERE m.author_id=u.id AND m.status!='deleted') mod_count FROM users u"
             + where + " ORDER BY u.display_name COLLATE NOCASE,u.id LIMIT @limit OFFSET @offset", parameters).ToList();
 
         var items = rows.Select(u =>
@@ -251,7 +341,7 @@ public static class AdminEndpoints
             bool root = options.RootAdminId != "" && u.Id == options.RootAdminId;
             return new
             {
-                id = u.Id, username = u.Username, display_name = u.DisplayName, is_admin = u.IsAdmin != 0 || root,
+                id = u.Id, username = u.Username, display_name = u.DisplayName, is_admin = u.IsAdmin != 0 || root, is_developer = u.IsDeveloper != 0,
                 is_verified = u.IsVerified != 0, is_banned = u.IsBanned != 0, mod_count = u.ModCount, is_root = root,
             };
         }).ToList();
@@ -312,6 +402,29 @@ public static class AdminEndpoints
         db.BeginImmediate();
         db.Exec("UPDATE users SET is_admin=@isAdmin WHERE id=@uid", new { isAdmin = isAdmin ? 1 : 0, uid });
         Audit(db, actor, isAdmin ? "admin.grant" : "admin.revoke", uid);
+        db.Commit();
+
+        return Api.Ok();
+    }
+
+    // Developer is a badge for people who work on the site itself. Only the root administrator hands it out.
+    private static async Task<IResult> ManageDeveloperAsync(string uid, HttpRequest request, ForgeContext context, Db db)
+    {
+        CurrentUser actor = RequireAdmin(context, true);
+        JsonObject? payload = await JsonBody.ReadObjectAsync(request);
+
+        if (payload == null || !payload.HasExactly("is_developer") || !payload["is_developer"].IsBool(out bool isDeveloper))
+            throw ApiException.BadRequest("Supply a boolean is_developer value.");
+
+        UserRow target = db.One<UserRow>("SELECT * FROM users WHERE id=@uid AND deleted_at IS NULL", new { uid })
+            ?? throw ApiException.NotFound("User not found.");
+
+        if (isDeveloper && target.Banned)
+            throw ApiException.BadRequest("Unban this user before giving them the Developer badge.");
+
+        db.BeginImmediate();
+        db.Exec("UPDATE users SET is_developer=@value WHERE id=@uid", new { value = isDeveloper ? 1 : 0, uid });
+        Audit(db, actor, isDeveloper ? "developer.grant" : "developer.revoke", uid);
         db.Commit();
 
         return Api.Ok();

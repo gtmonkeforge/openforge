@@ -119,6 +119,12 @@ function actions(u, reload) {
             label: u.is_verified ? 'Remove verification' : 'Verify', icon: 'check', disabled: u.deleted_at ? true : false,
             action: () => run(api('/api/v1/admin/users/' + encodeURIComponent(u.id), { method: 'PATCH', json: { is_verified: !u.is_verified } }), 'User updated.', reload),
         },
+        {
+            label: u.is_developer ? 'Remove Developer badge' : 'Give Developer badge', icon: 'hammers',
+            disabled: !auth.user.is_root ? 'Only the root administrator can give the Developer badge.' : u.deleted_at ? true : false,
+            action: () => run(api('/api/v1/admin/developers/' + encodeURIComponent(u.id), { method: 'PUT', json: { is_developer: !u.is_developer } }),
+                u.is_developer ? 'Developer badge removed.' : 'Developer badge given.', reload),
+        },
         'sep',
         {
             label: u.is_banned ? 'Unban' : 'Ban', icon: 'ban', danger: !u.is_banned, disabled: locked || (u.is_root ? 'The root administrator can’t be banned.' : false), action: async () => {

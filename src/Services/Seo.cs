@@ -194,6 +194,45 @@ public sealed partial class Seo
         };
     }
 
+    public PageMeta Extensions(ModListRow row)
+    {
+        if (row.Status != "approved" || row.Visibility != "public")
+            return PageMeta.Private;
+
+        return new PageMeta
+        {
+            Description = Truncate($"Free extensions for {row.Name}, a {(Game == "" ? "mod" : Game + " mod")} by {row.DisplayName}, approved by its developers."),
+            Canonical = ModPath(row) + "/extensions",
+            Image = row.Banner ?? row.Logo,
+        };
+    }
+
+    // The docs landing page shows the first page, so it's the canonical address for that page rather than a duplicate.
+    public PageMeta Doc(ModListRow row, ModDocRow? page)
+    {
+        if (row.Status != "approved" || row.Visibility != "public")
+            return PageMeta.Private;
+
+        if (page == null)
+            return new PageMeta { Description = Truncate($"Documentation for {row.Name} on {_options.BrandName}."), Canonical = ModPath(row) + "/docs" };
+
+        bool first = _db.One<string>("SELECT slug FROM mod_docs WHERE guid=@guid ORDER BY position,id LIMIT 1", new { guid = row.Guid }) == page.Slug;
+        string excerpt = Excerpt(page.Body, name: page.Title);
+
+        var html = new StringBuilder();
+        html.Append("<article class=\"surface panel\"><nav class=\"breadcrumb\"><a href=\"").Append(Encode(ModPath(row))).Append("\">").Append(Encode(row.Name)).Append("</a></nav><h1>")
+            .Append(Encode(page.Title)).Append("</h1><div class=\"markdown\">").Append(_markdown.Render(page.Body)).Append("</div></article>");
+
+        return new PageMeta
+        {
+            Description = Truncate(excerpt == "" ? $"{page.Title}: documentation for {row.Name} on {_options.BrandName}." : excerpt),
+            Canonical = ModPath(row) + "/docs" + (first ? "" : "/" + Uri.EscapeDataString(page.Slug)),
+            Image = row.Banner ?? row.Logo,
+            OgType = "article",
+            Content = html.ToString(),
+        };
+    }
+
     public PageMeta Profile(UserRow user)
     {
         if (user.Banned)
@@ -277,6 +316,17 @@ public sealed partial class Seo
         {
             Url(ModPath(mod), mod.UpdatedAt);
             Url(ModPath(mod) + "/monkeshield", mod.UpdatedAt);
+
+            if (mod.AcceptsExtensions)
+                Url(ModPath(mod) + "/extensions", mod.UpdatedAt);
+
+            if (!mod.HasDocs)
+                continue;
+
+            List<(string Slug, string Updated)> docs = _db.Query<(string, string)>("SELECT slug,updated_at FROM mod_docs WHERE guid=@guid ORDER BY position,id", new { guid = mod.Guid }).ToList();
+
+            for (int i = 0; i < docs.Count; i++)
+                Url(ModPath(mod) + "/docs" + (i == 0 ? "" : "/" + Uri.EscapeDataString(docs[i].Slug)), docs[i].Updated);
         }
 
         // One entry per author with public work, using their newest mod as the change date.

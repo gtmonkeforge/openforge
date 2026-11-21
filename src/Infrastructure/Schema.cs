@@ -37,7 +37,7 @@ public static class Schema
             ("description", "TEXT NOT NULL DEFAULT ''"), ("links", "TEXT NOT NULL DEFAULT '[]'"),
             ("is_admin", "INTEGER NOT NULL DEFAULT 0"), ("is_verified", "INTEGER NOT NULL DEFAULT 0"),
             ("is_banned", "INTEGER NOT NULL DEFAULT 0"), ("public_username", "TEXT"), ("avatar", "TEXT"),
-            ("custom_slug", "TEXT"), ("accent_color", "TEXT NOT NULL DEFAULT '#dc5c3b'"),
+            ("custom_slug", "TEXT"), ("accent_color", "TEXT NOT NULL DEFAULT '#dc5c3b'"), ("is_developer", "INTEGER NOT NULL DEFAULT 0"),
         })
         {
             if (!userColumns.Contains(name))
@@ -52,9 +52,24 @@ public static class Schema
             db.Execute("ALTER TABLE mods ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'");
 
         db.Execute("UPDATE mods SET status='approved' WHERE visibility IN ('private','code') AND status='pending'");
-        foreach (string column in new[] { "banner", "choice_category", "custom_slug" })
+        foreach (string column in new[] { "banner", "choice_category", "custom_slug", "choice_note" })
             if (!modColumns.Contains(column))
                 db.Execute($"ALTER TABLE mods ADD COLUMN {column} TEXT");
+
+        // Modder's Choice used to be one mod per category. It's now a single badge any number of mods can hold,
+        // so every mod that held a category badge keeps the badge, without a note until staff write one.
+        if (!modColumns.Contains("is_choice"))
+            db.Execute("ALTER TABLE mods ADD COLUMN is_choice INTEGER NOT NULL DEFAULT 0");
+
+        db.Execute("UPDATE mods SET is_choice=1,choice_category=NULL WHERE choice_category IS NOT NULL");
+
+        // Medals are staff-named awards, such as a game jam placing. A mod can hold several, and its creator shows them too.
+        db.Execute("""
+            CREATE TABLE IF NOT EXISTS mod_medals(
+                id INTEGER PRIMARY KEY, guid TEXT NOT NULL REFERENCES mods(guid) ON DELETE CASCADE,
+                name TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS mod_medals_guid ON mod_medals(guid);
+            """);
 
         db.Execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS user_public_username ON users(public_username COLLATE NOCASE) WHERE public_username IS NOT NULL;
@@ -86,9 +101,6 @@ public static class Schema
                 id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
                 name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL,
                 created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
-            CREATE TABLE IF NOT EXISTS native_auth_codes(
-                code_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
-                redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS file_loaders(
                 file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
                 loader TEXT NOT NULL CHECK(loader IN ('bepinex5','bepinex6','melonloader')));
@@ -138,12 +150,75 @@ public static class Schema
         MigrateStore(db);
         MigrateAccounts(db);
         MigrateAdmin(db);
+        MigrateExtensions(db);
+        MigrateOAuth(db);
 
         // Servers that already had a root administrator were set up by hand, so they never see the setup wizard.
         db.Execute("CREATE TABLE IF NOT EXISTS server_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
         if (options.RootAdminId != "")
             db.Execute("INSERT OR IGNORE INTO server_state(key,value) VALUES('setup_completed',@now)", new { now = Text.NowIso() });
+    }
+
+    private static void MigrateExtensions(SqliteConnection db)
+    {
+        HashSet<string> modColumns = Columns(db, "mods");
+
+        // Both tabs are opt-in, so existing mod pages look the same until their developers turn one on.
+        foreach (string column in new[] { "extensions_enabled", "docs_enabled" })
+            if (!modColumns.Contains(column))
+                db.Execute($"ALTER TABLE mods ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0");
+
+        // An extension is an ordinary mod with a row here naming its parent. state is the parent developers' decision,
+        // separate from staff review: staff decide whether the mod is safe, the parent decides whether it's listed.
+        db.Execute("""
+            CREATE TABLE IF NOT EXISTS mod_extensions(
+                guid TEXT PRIMARY KEY REFERENCES mods(guid) ON DELETE CASCADE,
+                parent_guid TEXT NOT NULL REFERENCES mods(guid) ON DELETE CASCADE,
+                state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','unapproved')),
+                featured INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT,
+                CHECK(guid != parent_guid));
+            CREATE INDEX IF NOT EXISTS mod_extensions_parent ON mod_extensions(parent_guid,state,featured);
+            CREATE TABLE IF NOT EXISTS mod_docs(
+                id INTEGER PRIMARY KEY, guid TEXT NOT NULL REFERENCES mods(guid) ON DELETE CASCADE,
+                slug TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT, UNIQUE(guid,slug));
+            CREATE INDEX IF NOT EXISTS mod_docs_order ON mod_docs(guid,position);
+            """);
+    }
+
+    private static void MigrateOAuth(SqliteConnection db)
+    {
+        // OAuth2 apps replace the old desktop PKCE handoff, whose one-time codes lived in native_auth_codes.
+        // A grant is one person's consent to one app; deleting it (or the app) takes every code and token with it.
+        db.Execute("""
+            DROP TABLE IF EXISTS native_auth_codes;
+            CREATE TABLE IF NOT EXISTS oauth_apps(
+                id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '', homepage_url TEXT, logo TEXT, redirect_uris TEXT NOT NULL DEFAULT '[]',
+                public_client INTEGER NOT NULL DEFAULT 0, verified_at TEXT, verified_by TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS oauth_apps_owner ON oauth_apps(owner_id);
+            CREATE TABLE IF NOT EXISTS oauth_secrets(
+                id TEXT PRIMARY KEY, app_id TEXT NOT NULL REFERENCES oauth_apps(id) ON DELETE CASCADE, name TEXT NOT NULL,
+                secret_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
+            CREATE INDEX IF NOT EXISTS oauth_secrets_app ON oauth_secrets(app_id);
+            CREATE TABLE IF NOT EXISTS oauth_grants(
+                id TEXT PRIMARY KEY, app_id TEXT NOT NULL REFERENCES oauth_apps(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, scope TEXT NOT NULL,
+                created_at TEXT NOT NULL, last_used_at TEXT, UNIQUE(app_id,user_id));
+            CREATE INDEX IF NOT EXISTS oauth_grants_user ON oauth_grants(user_id);
+            CREATE TABLE IF NOT EXISTS oauth_codes(
+                code_hash TEXT PRIMARY KEY, app_id TEXT NOT NULL REFERENCES oauth_apps(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, redirect_uri TEXT NOT NULL, scope TEXT NOT NULL,
+                challenge TEXT, epoch INTEGER NOT NULL, expires_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS oauth_tokens(
+                token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('access','refresh')),
+                grant_id TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE, scope TEXT NOT NULL,
+                epoch INTEGER NOT NULL, created REAL NOT NULL, expires_at REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS oauth_tokens_grant ON oauth_tokens(grant_id);
+            CREATE INDEX IF NOT EXISTS oauth_tokens_expiry ON oauth_tokens(expires_at);
+            """);
     }
 
     private static void MigrateAdmin(SqliteConnection db)

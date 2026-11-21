@@ -10,7 +10,7 @@ Either kind can add **passkeys** (Face ID, Touch ID, Windows Hello, a phone or a
 This page covers the ways to sign in, depending on what you're building:
 
 - **The website.** Go to `/login` and pick Discord, a passkey, or your username/email and password.
-- **Desktop apps** like Launchpad or the CLI. The app opens your browser, you sign in any of those ways, and the app gets its own session.
+- **Apps** like Launchpad, the CLI, or anything a creator builds. These are OAuth2 applications: the app opens your browser, you sign in any of those ways, approve the app, and it gets its own tokens.
 - **Scripts and CI.** Use an access key. Keys can only publish releases, nothing else.
 
 At the end there's a section for people running their own OpenForge server.
@@ -35,84 +35,28 @@ A couple of things worth knowing:
 - If you started signing in from a page we don't redirect back to, you'll end up on the Publish page. That's normal.
 - If your account is banned, sign-in stops with a message saying so.
 
-## In a desktop app
+## In an app (OAuth2)
 
-Desktop apps can't safely hold a Discord client secret, so they use a slightly different flow. It's the standard "sign in through the browser and come back to the app" pattern ([OAuth with PKCE](https://oauth.net/2/pkce/)), and if you've built one of these before it'll look familiar.
+Apps sign people in with OAuth2. This replaces the old desktop PKCE handoff (`/login?redirect_uri=...` plus `/api/v1/auth/native/exchange`), which has been removed.
 
-Here's the whole thing:
+1. Register the app under **Settings -> Developer -> Applications**. Desktop apps should be **public clients** with a loopback redirect such as `http://127.0.0.1/callback`. Any port is accepted at sign-in time.
+2. Send the user to `/oauth/authorize` with `response_type=code`, your `client_id`, `redirect_uri`, `scope`, `state`, and a PKCE `code_challenge` (S256).
+3. Exchange the returned `code` at `POST /api/v1/oauth/token` for an access token (1 hour) and a refresh token (60 days, rotated on every use).
+4. Call the API with `Authorization: Bearer <access token>`. Bearer tokens don't need a CSRF token.
 
-1. **Make three random values.**
-   - A `code_verifier`: 43 to 128 characters from `A-Z a-z 0-9 . _ ~ -`. Keep it secret.
-   - The `code_challenge`: SHA-256 of the verifier, base64url-encoded with no padding. It's always 43 characters.
-   - A `state`: 22 to 128 random base64url characters. This is how you'll know the response is for you.
+What a token can do depends on its scopes: `identify`, `email`, `publish` (like an access key), and `account` (the whole API as the user, minus security settings, payouts and admin). Only apps that staff have **verified** can ask for `account`. Verified apps show a checkmark on the approval screen.
 
-2. **Start a tiny web server on the loopback address**, on any free port, like `http://127.0.0.1:53682/callback`. It must be `127.0.0.1` or `[::1]`. `localhost` is rejected, and so is anything with a `?` or `#` in it.
+The full walkthrough, with request and response examples, is in the developer guide at `/docs/guides/oauth-apps` ([source](../src/docs/guides/oauth-apps.md)).
 
-3. **Open the user's browser** to:
-
-   ```
-   https://monkeforge.org/login
-     ?redirect_uri=http://127.0.0.1:53682/callback
-     &code_challenge=<challenge>
-     &code_challenge_method=S256
-     &state=<state>
-   ```
-
-   `/login` lets the user pick Discord, a passkey or their password. If you only want Discord, `/auth/discord` takes exactly the same parameters and skips the choice.
-
-4. **Wait for the browser to hit your server.** After the user signs in, they'll be sent to your `redirect_uri` with `?code=...&state=...`. Check that `state` matches what you sent. If it doesn't, throw the request away. Then show the user a "You can close this tab now" page.
-
-5. **Swap the code for a session, quickly.** The code works once and expires after 60 seconds.
-
-   ```http
-   POST /api/v1/auth/native/exchange
-   Content-Type: application/json
-
-   { "code": "<code>", "code_verifier": "<verifier>", "redirect_uri": "http://127.0.0.1:53682/callback" }
-   ```
-
-   `redirect_uri` must be exactly the same string you used in step 3.
-
-   You'll get back the user and a CSRF token:
-
-   ```json
-   { "user": { "id": "...", "username": "...", ... }, "csrf_token": "..." }
-   ```
-
-   along with a `session` cookie in `Set-Cookie`.
-
-6. **Keep the cookie and the CSRF token.** The cookie is the sign-in, and it lasts 30 days like on the website. Send it with every request. For anything that changes data (POST, PUT, PATCH, DELETE), also send the token as an `X-CSRF-Token` header. Store both somewhere the OS protects, like the Windows Credential Manager or the macOS Keychain, not in a plain config file.
-
-One side effect: because the approval happened in the user's browser, the browser ends up signed in too. That's expected.
-
-### A minimal example
-
-Python, standard library only, minus the bit where you open the browser and catch the redirect:
-
-```python
-import base64, hashlib, secrets, json, urllib.request
-
-verifier = secrets.token_urlsafe(48)          # 64 chars
-challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-state = secrets.token_urlsafe(24)
-redirect = "http://127.0.0.1:53682/callback"
-
-# ...open the browser, receive ?code=...&state=... on your loopback server, check state...
-
-body = json.dumps({"code": code, "code_verifier": verifier, "redirect_uri": redirect}).encode()
-req = urllib.request.Request("https://monkeforge.org/api/v1/auth/native/exchange", body, {"Content-Type": "application/json"})
-with urllib.request.urlopen(req) as res:
-    session_cookie = res.headers["Set-Cookie"]   # keep the "session=..." part
-    csrf_token = json.load(res)["csrf_token"]
-```
+People manage the apps they've approved in **Settings -> Sign-in & security -> Authorized apps**. Removing an app, signing out everywhere, or changing the password ends its tokens at once.
 
 ### Signing out
 
-Send `POST /api/v1/logout` with the cookie and the CSRF header, then delete what you stored. To sign out every device at once, use **Settings -> Sign-in & security -> Sign out other devices** (`POST /api/v1/account/sign-out-everywhere`). Changing or resetting a password does the same. A banned account is locked out right away on every device, because every request checks the account.
+Revoke the refresh token with `POST /api/v1/oauth/revoke`, then delete what you stored. Keep tokens somewhere the OS protects, like the Windows Credential Manager or the macOS Keychain, not in a plain config file.
 
 ### Using the injector?
 
-Once you're signed in, Launchpad also registers the computer as a device before it can install injector mods. That's covered in [INJECTOR_PROTOCOL.md](INJECTOR_PROTOCOL.md).
+Once signed in with the `account` scope, Launchpad also registers the computer as a device before it can install injector mods. That's covered in [INJECTOR_PROTOCOL.md](INJECTOR_PROTOCOL.md).
 
 ## From scripts and CI
 
@@ -135,8 +79,9 @@ Keys are deliberately limited. They can only `POST` to the two publishing endpoi
 | What you see | What it means |
 |---|---|
 | "Discord sign-in expired or could not be verified" | More than 10 minutes passed, or the browser lost its cookie partway through. Start again. |
-| "Native sign-in requires a loopback HTTP redirect, S256 challenge, and random state" | One of the step 3 values is off. Check the redirect is `http://127.0.0.1:<port>/...` and the challenge is exactly 43 characters. |
-| "Native sign-in expired or could not be verified" | The code was already used, is over 60 seconds old, or `redirect_uri` / `code_verifier` don't match. Start the flow again. |
+| An app "asked to send you to an address it hasn't registered" | The app's `redirect_uri` isn't in its registered list. The app's developer needs to add it under **Settings -> Developer -> Applications**. |
+| `invalid_grant` from `/api/v1/oauth/token` | The code was already used, is over 60 seconds old, or `redirect_uri` / `code_verifier` don't match; or the refresh token was already rotated or revoked. Start sign-in again. |
+| "This app wasn't given permission to do that." | The access token's scopes don't cover that endpoint. |
 | "Refresh the page and try again. The security token is missing or expired." | A POST/PUT/PATCH/DELETE without a valid `X-CSRF-Token`. Get a fresh one from `GET /api/v1/session`. |
 | "API keys may only publish releases." | An access key was used on an endpoint other than publishing. |
 | "Your account is banned from this site." | Exactly what it says. Talk to MonkeForge staff. |

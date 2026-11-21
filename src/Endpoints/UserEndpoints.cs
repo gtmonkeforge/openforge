@@ -47,6 +47,8 @@ public static class UserEndpoints
             Description = row.Description,
             Links = ParseLinks(row.Links),
             IsAdmin = row.IsAdmin != 0 || (options.RootAdminId != "" && row.Id == options.RootAdminId),
+            IsDeveloper = row.IsDeveloper != 0,
+            Medals = ModPresenter.CreatorMedals(db, row.Id),
             IsVerified = row.Verified,
             PublicUsername = row.PublicUsername,
             Avatar = row.Avatar,

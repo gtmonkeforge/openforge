@@ -166,6 +166,7 @@ public static class ReviewEndpoints
                 is_verified = author.Verified,
                 is_banned = author.Banned,
                 is_admin = author.IsAdmin != 0 || author.Id == options.RootAdminId,
+                is_developer = author.IsDeveloper != 0,
                 is_group = author.Group,
                 members,
                 created_at = author.CreatedAt,

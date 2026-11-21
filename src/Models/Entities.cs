@@ -11,6 +11,7 @@ public class UserRow
     public string Description { get; set; } = "";
     public string Links { get; set; } = "[]";
     public int IsAdmin { get; set; }
+    public int IsDeveloper { get; set; }
     public int IsVerified { get; set; }
     public int IsBanned { get; set; }
     public string? PublicUsername { get; set; }
@@ -66,24 +67,56 @@ public class ModRow
     public string Status { get; set; } = "pending";
     public string Visibility { get; set; } = "public";
     public string? Banner { get; set; }
-    public string? ChoiceCategory { get; set; }
+    public int IsChoice { get; set; }
+    public string? ChoiceNote { get; set; }
     public string? CustomSlug { get; set; }
     public string Links { get; set; } = "[]";
     public long PriceCents { get; set; }
     public int UsesInjector { get; set; }
+    public int ExtensionsEnabled { get; set; }
+    public int DocsEnabled { get; set; }
 
     public bool Paid => PriceCents > 0;
     public bool Injected => UsesInjector != 0;
+    public bool AcceptsExtensions => ExtensionsEnabled != 0;
+    public bool HasDocs => DocsEnabled != 0;
+}
+
+public sealed class ExtensionRow
+{
+    public string Guid { get; set; } = "";
+    public string ParentGuid { get; set; } = "";
+    public string State { get; set; } = "pending";
+    public int Featured { get; set; }
+    public string CreatedAt { get; set; } = "";
+    public string? DecidedAt { get; set; }
+    public string? DecidedBy { get; set; }
+
+    public static readonly string[] States = ["pending", "approved", "unapproved"];
+}
+
+public sealed class ModDocRow
+{
+    public long Id { get; set; }
+    public string Guid { get; set; } = "";
+    public string Slug { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+    public int Position { get; set; }
+    public string CreatedAt { get; set; } = "";
+    public string UpdatedAt { get; set; } = "";
+    public string? UpdatedBy { get; set; }
 }
 
 public sealed class ModListRow : ModRow
 {
     public const string BaseQuery =
-        "SELECT m.*,u.username,COALESCE(u.public_username,u.display_name) display_name,u.is_admin,u.is_verified,u.avatar author_avatar,u.custom_slug author_slug,u.stripe_charges_enabled author_charges,u.stripe_transfers_enabled author_transfers FROM mods m JOIN users u ON u.id=m.author_id";
+        "SELECT m.*,u.username,COALESCE(u.public_username,u.display_name) display_name,u.is_admin,u.is_developer,u.is_verified,u.avatar author_avatar,u.custom_slug author_slug,u.stripe_charges_enabled author_charges,u.stripe_transfers_enabled author_transfers FROM mods m JOIN users u ON u.id=m.author_id";
 
     public string Username { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public int IsAdmin { get; set; }
+    public int IsDeveloper { get; set; }
     public int IsVerified { get; set; }
     public string? AuthorAvatar { get; set; }
     public string? AuthorSlug { get; set; }

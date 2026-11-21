@@ -20,14 +20,14 @@ It **cannot** stop someone who controls the computer running the game from dumpi
 
 ```
 Launchpad                                   MonkeForge
-   |  native sign-in (existing PKCE flow)  ->  session cookie + csrf_token
+   |  OAuth2 sign-in (scope "account")      ->  bearer access + refresh token
    |  POST /api/v1/injector/devices        ->  register device public key (once per install)
    |  POST /api/v1/injector/challenge      ->  { nonce }                     (valid 60 s, single use)
    |  POST /api/v1/injector/payload        ->  encrypted envelope (binary)
    |  decrypt in memory, verify SHA-256, inject
 ```
 
-All requests use the session cookie from `/api/v1/auth/native/exchange`. Every POST and DELETE must send the `X-CSRF-Token` header, using the `csrf_token` from that exchange.
+All requests send `Authorization: Bearer <access token>` from an OAuth2 sign-in with the `account` scope (see [SIGN_IN.md](SIGN_IN.md)). Launchpad must be registered as a verified app to get that scope. Bearer requests don't need an `X-CSRF-Token` header.
 
 ## 1. Device key (once per install)
 

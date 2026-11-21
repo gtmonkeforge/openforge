@@ -119,6 +119,27 @@ public static class ModEndpoints
                 throw ApiException.BadRequest("Price must be free or paid.");
         }
 
+        // Extensions are found through their parent's Extensions tab, so the main listing leaves them out
+        // unless asked. A profile or "your mods" lists everything the author published.
+        string extensions = Query("extensions");
+
+        if (extensions == "")
+            extensions = Query("author_id") != "" || Query("mine") == "true" ? "include" : "exclude";
+
+        switch (extensions)
+        {
+            case "include":
+                break;
+            case "exclude":
+                conditions.Add("NOT EXISTS(SELECT 1 FROM mod_extensions e WHERE e.guid=m.guid)");
+                break;
+            case "only":
+                conditions.Add("EXISTS(SELECT 1 FROM mod_extensions e WHERE e.guid=m.guid)");
+                break;
+            default:
+                throw ApiException.BadRequest("extensions must be include, exclude or only.");
+        }
+
         if (Query("mine") == "true")
         {
             CurrentUser mine = context.RequireUser("Sign in to view your mods.");

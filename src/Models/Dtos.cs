@@ -6,6 +6,17 @@ namespace OpenForge.Models;
 
 public sealed record LinkDto(string Label, string Url);
 
+// A staff-named award. On a mod it's that mod's own medal; on a person it also names the mod that won it.
+public sealed class MedalDto
+{
+    public long Id { get; init; }
+    public string Name { get; init; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModName { get; init; }
+}
+
 // Flags stay 0/1 and links stays a JSON string: the v1 API returned them that way and clients rely on it.
 public sealed class SessionUserDto
 {
@@ -15,6 +26,7 @@ public sealed class SessionUserDto
     public string Description { get; init; } = "";
     public string Links { get; init; } = "[]";
     public bool IsAdmin { get; init; }
+    public bool IsDeveloper { get; init; }
     public int IsVerified { get; init; }
     public int IsBanned { get; init; }
     public string? PublicUsername { get; init; }
@@ -48,7 +60,9 @@ public sealed class ProfileDto
     public string Description { get; init; } = "";
     public List<LinkDto> Links { get; init; } = [];
     public bool IsAdmin { get; init; }
+    public bool IsDeveloper { get; init; }
     public bool IsVerified { get; init; }
+    public List<MedalDto> Medals { get; init; } = [];
     public string? PublicUsername { get; init; }
     public string? Avatar { get; init; }
     public string? CustomSlug { get; init; }
@@ -68,7 +82,9 @@ public sealed class AuthorDto
     public string Name { get; init; } = "";
     public string DiscordUsername { get; init; } = "";
     public bool IsAdmin { get; init; }
+    public bool IsDeveloper { get; init; }
     public bool IsVerified { get; init; }
+    public List<MedalDto> Medals { get; init; } = [];
     public string? Avatar { get; init; }
     public string ProfileUrl { get; init; } = "";
 }
@@ -127,11 +143,13 @@ public sealed class ModDto
     public string Status { get; init; } = "";
     public string Visibility { get; init; } = "";
     public string? Banner { get; init; }
-    public string? ChoiceCategory { get; init; }
+    public bool ModdersChoice { get; init; }
+    public List<MedalDto> Medals { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ChoiceNote { get; init; }
     public string? CustomSlug { get; init; }
     public JsonNode Links { get; init; } = new JsonArray();
     public AuthorDto Author { get; init; } = new();
-    public List<string> Badges { get; init; } = [];
     public string Id { get; init; } = "";
     public string Url { get; set; } = "";
     public List<string> Loaders { get; init; } = [];
@@ -142,6 +160,21 @@ public sealed class ModDto
     public bool DonationsEnabled { get; init; }
     public bool Gated { get; init; }
     public long? MinTierCents { get; init; }
+    public bool ExtensionsEnabled { get; init; }
+    public bool DocsEnabled { get; init; }
+
+    // Set when this mod is an extension of another mod.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExtendsDto? Extends { get; init; }
+
+    // The newest stable release, included in extension listings so marketplaces can install without a second request.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReleaseDto? LatestRelease { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExtensionCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? DocCount { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TierDto>? Tiers { get; set; }
@@ -157,6 +190,37 @@ public sealed class ModDto
 }
 
 public sealed record PageDto<T>(List<T> Items, long Total, int Page, int Limit);
+
+public sealed class ExtendsDto
+{
+    public string Guid { get; init; } = "";
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string Url { get; init; } = "";
+
+    // The parent developers' decision: pending, approved or unapproved.
+    public string State { get; init; } = "pending";
+    public bool Featured { get; init; }
+}
+
+public sealed class ModDocSummaryDto
+{
+    public string Slug { get; init; } = "";
+    public string Title { get; init; } = "";
+    public int Position { get; init; }
+    public string UpdatedAt { get; init; } = "";
+}
+
+public sealed class ModDocDto
+{
+    public string Slug { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string Body { get; init; } = "";
+    public string Html { get; init; } = "";
+    public int Position { get; init; }
+    public string CreatedAt { get; init; } = "";
+    public string UpdatedAt { get; init; } = "";
+}
 
 public sealed class SocialSummaryDto
 {

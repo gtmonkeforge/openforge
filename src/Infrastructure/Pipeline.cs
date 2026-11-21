@@ -19,6 +19,12 @@ public sealed class CsrfExemptAttribute : Attribute
     
 }
 
+// OAuth client endpoints (token, revoke) read the Authorization header themselves, as HTTP Basic client credentials.
+public sealed class ClientAuthAttribute : Attribute
+{
+
+}
+
 public static class Pipeline
 {
     private const string ContentSecurityPolicy =
@@ -124,21 +130,25 @@ public static class Pipeline
 
     private static bool AuthenticateApiKey(HttpContext context, ForgeContext forge, Endpoint? endpoint)
     {
-        if (!context.Request.Headers.TryGetValue("Authorization", out var header))
+        if (!context.Request.Headers.TryGetValue("Authorization", out var header) || endpoint?.Metadata.GetMetadata<ClientAuthAttribute>() != null)
             return false;
-
-        if (endpoint?.Metadata.GetMetadata<ApiKeyAllowedAttribute>() == null || !HttpMethods.IsPost(context.Request.Method))
-            throw ApiException.Forbidden("API keys may only publish releases.");
 
         string authorization = header.ToString();
         int space = authorization.IndexOf(' ');
         string scheme = space < 0 ? authorization : authorization[..space];
-        string token = space < 0 ? "" : authorization[(space + 1)..];
+        string token = space < 0 ? "" : authorization[(space + 1)..].Trim();
+        bool publishEndpoint = endpoint?.Metadata.GetMetadata<ApiKeyAllowedAttribute>() != null;
+        Db db = context.RequestServices.GetRequiredService<Db>();
+
+        if (scheme.Equals("bearer", StringComparison.OrdinalIgnoreCase) && token.StartsWith(OAuth.AccessPrefix, StringComparison.Ordinal))
+            return AuthenticateOAuth(context, forge, db, token, publishEndpoint);
+
+        if (!publishEndpoint || !HttpMethods.IsPost(context.Request.Method))
+            throw ApiException.Forbidden("API keys may only publish releases.");
 
         if (!scheme.Equals("bearer", StringComparison.OrdinalIgnoreCase) || token == "" || token.Length > 200)
             throw ApiException.Unauthorized("Use Authorization: Bearer YOUR_API_KEY.");
 
-        Db db = context.RequestServices.GetRequiredService<Db>();
         ApiKeyRow? key = db.One<ApiKeyRow>("SELECT * FROM api_keys WHERE token_hash=@hash AND revoked_at IS NULL", new { hash = Text.Sha256Hex(token) });
 
         if (key == null)
@@ -151,6 +161,25 @@ public static class Pipeline
             throw ApiException.Forbidden("This account cannot publish releases.");
 
         db.Exec("UPDATE api_keys SET last_used_at=@now WHERE id=@id", new { now = Text.NowIso(), id = key.Id });
+        return true;
+    }
+
+    private static bool AuthenticateOAuth(HttpContext context, ForgeContext forge, Db db, string token, bool publishEndpoint)
+    {
+        OAuthCaller? caller = OAuth.Resolve(db, token);
+
+        if (caller == null)
+            throw ApiException.Unauthorized("This access token is invalid, expired or revoked. Refresh it or sign in again.");
+
+        if (!OAuth.Allows(caller, context.Request, publishEndpoint))
+            throw ApiException.Forbidden("This app wasn't given permission to do that.");
+
+        forge.ApiUserId = caller.UserId;
+        forge.OAuth = caller;
+
+        if (forge.User == null)
+            throw ApiException.Unauthorized("This access token is invalid, expired or revoked. Refresh it or sign in again.");
+
         return true;
     }
 

@@ -15,6 +15,7 @@ public sealed class CurrentUser
 
     public string Id => Row.Id;
     public bool IsAdmin => Row.IsAdmin != 0 || IsRoot;
+    public bool IsDeveloper => Row.IsDeveloper != 0;
     public bool IsVerified => Row.Verified;
     public bool IsBanned => Row.Banned;
     public bool IsGroup => Row.Group;
@@ -33,6 +34,7 @@ public sealed class CurrentUser
             Description = Row.Description,
             Links = Row.Links,
             IsAdmin = IsAdmin,
+            IsDeveloper = IsDeveloper,
             IsVerified = Row.IsVerified,
             IsBanned = Row.IsBanned,
             PublicUsername = Row.PublicUsername,
@@ -65,6 +67,9 @@ public sealed class ForgeContext
 
     public SessionData Session { get; set; } = new SessionData();
     public string? ApiUserId { get; set; }
+
+    // Set when the request carries an OAuth access token instead of a browser session or access key.
+    public OpenForge.Services.OAuthCaller? OAuth { get; set; }
 
     public CurrentUser? User
     {

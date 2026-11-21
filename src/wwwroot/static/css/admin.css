@@ -330,3 +330,8 @@ table.data.users tbody tr:hover td { background: var(--hover); }
     .db-insert { grid-template-columns: 1fr; }
     .setup-card { padding: 20px; }
 }
+
+/* OAuth apps */
+.oauth-apps .user-cell small { display: block; }
+.app-redirects small { display: block; max-width: 280px; overflow-wrap: anywhere; font-size: 11px; }
+.app-status { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }

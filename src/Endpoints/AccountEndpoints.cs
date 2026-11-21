@@ -139,8 +139,8 @@ public static class AccountEndpoints
 
     private static IResult SignedIn(ForgeContext context, Db db, HttpResponse response, UserRow user, JsonObject payload)
     {
-        NativeAuthRequest? native = AuthEndpoints.ParseNative(payload["native"]);
-        string redirect = AuthEndpoints.CompleteSignIn(context, db, response, user.Id, native, Next(payload));
+        context.SignIn(user.Id);
+        string redirect = AuthEndpoints.SafeNext(Next(payload));
         return Api.Json(new { redirect, user = context.User?.ToDto(), csrf_token = context.Csrf() });
     }
 

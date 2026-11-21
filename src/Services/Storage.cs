@@ -177,7 +177,7 @@ public sealed class Storage
                 continue;
 
             bool linked = _db.Exists(
-                "SELECT 1 FROM mods WHERE logo=@url OR banner=@url OR EXISTS(SELECT 1 FROM json_each(mods.screenshots) WHERE value=@url) UNION ALL SELECT 1 FROM users WHERE avatar=@url LIMIT 1",
+                "SELECT 1 FROM mods WHERE logo=@url OR banner=@url OR EXISTS(SELECT 1 FROM json_each(mods.screenshots) WHERE value=@url) UNION ALL SELECT 1 FROM users WHERE avatar=@url UNION ALL SELECT 1 FROM oauth_apps WHERE logo=@url LIMIT 1",
                 new { url });
 
             if (linked)

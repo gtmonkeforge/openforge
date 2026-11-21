@@ -13,7 +13,6 @@ public sealed class SessionData
     public string? OauthState { get; set; }
     public double OauthStarted { get; set; }
     public string? OauthNext { get; set; }
-    public NativeAuthRequest? OauthNative { get; set; }
     public bool Permanent { get; set; }
 
     // Matches users.session_epoch at sign-in. Bumping the column signs the account out everywhere.
@@ -22,10 +21,8 @@ public sealed class SessionData
     public string? PasskeyPurpose { get; set; }
     public double PasskeyStarted { get; set; }
 
-    public bool IsEmpty => UserId == null && Csrf == null && OauthState == null && OauthNative == null && OauthNext == null && PasskeyChallenge == null;
+    public bool IsEmpty => UserId == null && Csrf == null && OauthState == null && OauthNext == null && PasskeyChallenge == null;
 }
-
-public sealed record NativeAuthRequest(string RedirectUri, string CodeChallenge, string CodeChallengeMethod, string State);
 
 public sealed class SessionStore
 {

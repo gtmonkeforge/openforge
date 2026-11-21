@@ -314,6 +314,9 @@ public static class StoreEndpoints
             if (!payload["price_cents"].IsInt(out price) || (price != 0 && (price < Payments.MinPriceCents || price > Payments.MaxPriceCents)))
                 throw ApiException.BadRequest($"Set the price to 0 for a free mod, or between {Payments.MinPriceCents} and {Payments.MaxPriceCents} cents.");
 
+            if (price > 0 && ExtensionEndpoints.IsExtension(db, row.Guid))
+                throw ApiException.Conflict("Extensions are always free.");
+
             if (price > 0 && row.Visibility != "public")
                 throw ApiException.Conflict("Make this mod public before setting a price.");
 
@@ -325,6 +328,9 @@ public static class StoreEndpoints
         {
             if (!payload["uses_injector"].IsBool(out injector))
                 throw ApiException.BadRequest("uses_injector must be true or false.");
+
+            if (injector && !row.Injected && ExtensionEndpoints.IsExtension(db, row.Guid))
+                throw ApiException.Conflict("Extensions are free downloads and can't use injector delivery.");
 
             // Turning it off would make sealed binaries downloadable, which buyers and creators were promised won't happen.
             if (row.Injected && !injector)

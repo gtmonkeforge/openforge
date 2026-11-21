@@ -1,6 +1,6 @@
-import { api, categories, esc, icon, modIcon, pagination, toast, userBadges } from '../core.js';
+import { api, choiceBadge, esc, icon, modIcon, pagination, toast, userBadges } from '../core.js';
 import { navigate } from './main.js';
-import { confirmDialog, counters, head, menu, site } from './ui.js';
+import { confirmDialog, counters, dialog, head, menu, site } from './ui.js';
 
 export async function render({ app, params, alive }) {
     app.innerHTML = `${head('All mods', 'Every listing on the site, whatever its status.')}
@@ -39,9 +39,9 @@ export async function render({ app, params, alive }) {
         const c = data.counts;
         app.querySelector('#mod-counts').textContent = `${c.pending || 0} pending · ${c.approved || 0} approved · ${c.unapproved || 0} denied · ${c.deleted || 0} deleted`;
         app.querySelector('#mod-rows').innerHTML = data.items.map((m, i) => `<tr data-row="${i}">
-            <td><div class="user-cell">${modIcon(m)}<div><strong>${esc(m.name)}</strong><small class="mono">${esc(m.guid)}</small></div></div></td>
+            <td><div class="user-cell">${modIcon(m)}<div><strong>${esc(m.name)}${choiceBadge(m)}</strong><small class="mono">${esc(m.guid)}</small></div></div></td>
             <td>${esc(m.author.name)} ${userBadges(m.author)}</td>
-            <td><span class="pill ${m.status === 'approved' ? 'good' : m.status === 'pending' ? 'warn' : 'bad'}">${esc(m.status === 'unapproved' ? 'denied' : m.status)}</span>${m.choice_category ? ` <span class="pill accent">Choice · ${esc(m.choice_category)}</span>` : ''}</td>
+            <td><span class="pill ${m.status === 'approved' ? 'good' : m.status === 'pending' ? 'warn' : 'bad'}">${esc(m.status === 'unapproved' ? 'denied' : m.status)}</span></td>
             <td class="mono">v${esc(m.current_version)}</td>
             <td><div class="kebab"><button class="icon-button" data-more="${i}" aria-label="Actions">${icon('more')}</button></div></td>
         </tr>`).join('') || '<tr><td colspan="5" class="hint">No mods match.</td></tr>';
@@ -59,10 +59,64 @@ export async function render({ app, params, alive }) {
         app.querySelectorAll('[data-more]').forEach(button => button.onclick = event => {
             event.stopPropagation();
             const m = data.items[Number(button.dataset.more)];
-            const choice = cat => async () => {
+            const choiceUrl = '/api/v1/admin/mods/' + encodeURIComponent(m.guid) + '/choice';
+            const electChoice = async () => {
+                const result = await dialog({
+                    title: m.modders_choice ? 'Edit Modder’s Choice note' : `Make ${m.name} Modder’s Choice?`,
+                    text: 'The mod gets a trophy next to its name. The note appears on the mod page; leave it empty to show only the trophy.',
+                    confirm: m.modders_choice ? 'Save note' : 'Give trophy',
+                    body: `<div class="field"><label for="choice-note">Why it’s Modder’s Choice <span>optional</span></label><textarea id="choice-note" name="note" rows="5" maxlength="1000" placeholder="What makes this mod stand out?">${esc(m.choice_note || '')}</textarea></div>`,
+                });
+
+                if (!result)
+                    return;
+
                 try {
-                    await api('/api/v1/admin/mods/' + encodeURIComponent(m.guid) + '/choice', { method: 'PUT', json: { category: cat } });
-                    toast(cat ? `Modder’s Choice for ${cat}.` : 'Badge removed.');
+                    await api(choiceUrl, { method: 'PUT', json: { note: result.note.trim() || null } });
+                    toast(m.modders_choice ? 'Note saved.' : `${m.name} is now Modder’s Choice.`);
+                    await load();
+                } catch (error) {
+                    toast(error.message, 'error');
+                }
+            };
+            const medalsUrl = '/api/v1/admin/mods/' + encodeURIComponent(m.guid) + '/medals';
+            const medalName = (title, confirm, value = '') => dialog({
+                title, confirm,
+                text: 'The medal shows on the mod and on its creator’s profile. Hovering it shows this name.',
+                body: `<div class="field"><label for="medal-name">Medal name</label><input id="medal-name" name="name" required maxlength="80" placeholder="#1 Winter Modding Contest" value="${esc(value)}"></div>`,
+            });
+            const addMedal = async () => {
+                const result = await medalName(`Give ${m.name} a medal`, 'Give medal');
+
+                if (result)
+                    await save(api(medalsUrl, { method: 'POST', json: { name: result.name } }), `Medal given to ${m.name}.`);
+            };
+            const renameMedal = medal => async () => {
+                const result = await medalName('Rename medal', 'Save', medal.name);
+
+                if (result)
+                    await save(api(medalsUrl + '/' + medal.id, { method: 'PATCH', json: { name: result.name } }), 'Medal renamed.');
+            };
+            const removeMedal = medal => async () => {
+                if (await confirmDialog(`Remove “${medal.name}”?`, `${m.name} and its creator stop showing this medal.`, 'Remove', true))
+                    await save(api(medalsUrl + '/' + medal.id, { method: 'DELETE' }), 'Medal removed.');
+            };
+            const save = async (promise, message) => {
+                try {
+                    await promise;
+                    toast(message);
+                    await load();
+                } catch (error) {
+                    toast(error.message, 'error');
+                }
+            };
+            const removeChoice = async () => {
+                if (!await confirmDialog('Remove Modder’s Choice?', `${m.name} loses its trophy and the note is deleted.`, 'Remove', true))
+                    return;
+
+                try {
+                    await api(choiceUrl, { method: 'DELETE' });
+                    toast('Modder’s Choice removed.');
                     await load();
                 } catch (error) {
                     toast(error.message, 'error');
@@ -76,8 +130,13 @@ export async function render({ app, params, alive }) {
                 ...(m.status === 'approved' || m.status === 'pending' ? [{ label: 'Unapprove', icon: 'x', action: () => act(m, 'unapproved') }] : []),
                 ...(m.status !== 'deleted' ? [{ label: 'Remove from site', icon: 'trash', danger: true, action: () => act(m, 'deleted') }] : []),
                 'sep',
-                ...categories.map(cat => ({ label: `Modder’s Choice · ${cat}`, icon: 'star', action: choice(cat) })),
-                ...(m.choice_category ? [{ label: 'Remove Modder’s Choice', icon: 'x', action: choice(null) }] : []),
+                ...(m.status !== 'deleted' ? [{ label: m.modders_choice ? 'Edit Modder’s Choice note' : 'Make Modder’s Choice', icon: 'trophy', action: electChoice }] : []),
+                ...(m.modders_choice ? [{ label: 'Remove Modder’s Choice', icon: 'x', action: removeChoice }] : []),
+                ...(m.status !== 'deleted' ? [{ label: 'Give medal', icon: 'medal', action: addMedal }] : []),
+                ...(m.medals || []).flatMap(medal => [
+                    { label: `Rename “${medal.name}”`, icon: 'edit', action: renameMedal(medal) },
+                    { label: `Remove “${medal.name}”`, icon: 'x', action: removeMedal(medal) },
+                ]),
                 'sep',
                 {
                     label: 'Purge permanently', icon: 'trash', danger: true, action: async () => {

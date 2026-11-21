@@ -28,6 +28,7 @@ public static class AdminUserEndpoints
         public string? Email { get; set; }
         public int EmailVerified { get; set; }
         public int IsAdmin { get; set; }
+        public int IsDeveloper { get; set; }
         public int IsVerified { get; set; }
         public int IsBanned { get; set; }
         public int IsGroup { get; set; }
@@ -71,6 +72,7 @@ public static class AdminUserEndpoints
             provider = u.IsGroup != 0 ? "group" : u.Id.StartsWith(Text.EmailAccountPrefix, StringComparison.Ordinal) ? "email" : "discord",
             is_admin = u.IsAdmin != 0 || root,
             is_root = root,
+            is_developer = u.IsDeveloper != 0,
             is_verified = u.IsVerified != 0,
             is_banned = u.IsBanned != 0,
             is_group = u.IsGroup != 0,
@@ -230,7 +232,6 @@ public static class AdminUserEndpoints
         UserRow target = Target(db, uid);
         CurrentUser actor = RequireOver(context, options, target);
         db.Exec("UPDATE users SET session_epoch=session_epoch+1 WHERE id=@uid", new { uid });
-        db.Exec("DELETE FROM native_auth_codes WHERE user_id=@uid", new { uid });
         AdminPortalEndpoints.Log(db, actor, "user.sign_out", uid);
         return Api.Ok();
     }
@@ -287,10 +288,12 @@ public static class AdminUserEndpoints
         db.BeginImmediate();
         db.Exec("UPDATE mods SET status='deleted' WHERE author_id=@uid", new { uid });
 
-        foreach (string table in new[] { "passkeys", "email_tokens", "native_auth_codes", "presence", "notifications", "injector_challenges" })
+        foreach (string table in new[] { "passkeys", "email_tokens", "oauth_codes", "oauth_grants", "presence", "notifications", "injector_challenges" })
             db.Exec($"DELETE FROM {table} WHERE user_id=@uid", new { uid });
 
         db.Exec("UPDATE api_keys SET revoked_at=COALESCE(revoked_at,@now) WHERE user_id=@uid", new { uid, now = Text.NowIso() });
+        // Their OAuth apps go too: an app nobody owns can't be maintained, and its secrets would outlive the account.
+        db.Exec("DELETE FROM oauth_apps WHERE owner_id=@uid", new { uid });
         db.Exec("UPDATE injector_devices SET revoked_at=COALESCE(revoked_at,@now) WHERE user_id=@uid", new { uid, now = Text.NowIso() });
         db.Exec("DELETE FROM friendships WHERE sender=@uid OR recipient=@uid", new { uid });
         db.Exec("DELETE FROM group_members WHERE user_id=@uid", new { uid });

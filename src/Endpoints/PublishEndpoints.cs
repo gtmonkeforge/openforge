@@ -116,6 +116,7 @@ public static class PublishEndpoints
         string notes = Field("notes");
         string visibility = form["visibility"].FirstOrDefault() ?? "public";
         string author = Field("author_id") == "" ? current.Id : Field("author_id");
+        string extends = Field("extends");
         bool releaseOnly = targetGuid != null;
 
         if (!Text.Visibilities.Contains(visibility))
@@ -188,6 +189,26 @@ public static class PublishEndpoints
 
         if (releaseOnly)
             (name, description, category, source) = (existing!.Name, existing.Description, existing.Category, existing.SourceUrl);
+
+        // Whether a mod is an extension is decided when it's first published, like its GUID.
+        ModRow? parent = null;
+
+        if (extends != "" && existing == null)
+        {
+            parent = ExtensionEndpoints.ResolveParent(extends, guid, access, db);
+        }
+        else if (extends != "")
+        {
+            // Scripts may resend the same parent with every release. Naming a different one would change what the mod is.
+            string? currentParent = db.One<string>("SELECT parent_guid FROM mod_extensions WHERE guid=@guid", new { guid });
+
+            if (currentParent == null || access.ResolveMod(extends)?.Guid != currentParent)
+                throw ApiException.BadRequest("Only new mods can be published as extensions.");
+        }
+
+        // Marketplaces install extensions straight from the API, which injector delivery would prevent.
+        if (parent != null && form["uses_injector"] == "true")
+            throw ApiException.BadRequest("Extensions are free downloads and can't use injector delivery.");
 
         string channelName = (form["channel"].FirstOrDefault() ?? "stable").Trim();
 
@@ -282,6 +303,9 @@ public static class PublishEndpoints
 
             if (existing == null)
                 db.Exec("UPDATE mods SET visibility=@visibility,uses_injector=@injector WHERE guid=@guid", new { visibility, injector = injector ? 1 : 0, guid });
+
+            if (parent != null)
+                ExtensionEndpoints.Attach(db, access, current, parent, guid, name);
 
             db.Exec("INSERT OR IGNORE INTO release_channels(guid,name) VALUES(@guid,'stable')", new { guid });
 

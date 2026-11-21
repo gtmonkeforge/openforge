@@ -8,6 +8,7 @@ const sections = [
     { path: '/admin/reviews', title: 'Reviews', icon: 'shield', badge: 'reviews', load: () => import('./reviews.js') },
     { path: '/admin/mods', title: 'All mods', icon: 'grid', load: () => import('./mods.js') },
     { path: '/admin/disputes', title: 'Disputes', icon: 'flag', badge: 'disputes', load: () => import('./ops.js'), view: 'disputes' },
+    { path: '/admin/apps', title: 'OAuth apps', icon: 'code', load: () => import('./apps.js') },
     { label: 'Support' },
     { path: '/admin/tickets', title: 'Tickets', icon: 'mail', badge: 'tickets', load: () => import('./tickets.js') },
     { path: '/admin/users', title: 'Users', icon: 'users', load: () => import('./users.js') },

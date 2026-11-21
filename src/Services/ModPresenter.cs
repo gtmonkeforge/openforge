@@ -15,7 +15,7 @@ public sealed class ModPresenter
     private readonly MarkdownRenderer _markdown;
     private readonly Payments _payments;
     private readonly ForgeContext _context;
-    private HashSet<string>? _topTen;
+    private readonly Dictionary<string, List<MedalDto>> _creatorMedals = new();
 
     public ModPresenter(Db db, ForgeOptions options, Channels channels, MarkdownRenderer markdown, Payments payments, ForgeContext context)
     {
@@ -79,19 +79,31 @@ public sealed class ModPresenter
             """, new { guid, channel }).ToList();
     }
 
+    public static List<MedalDto> ModMedals(Db db, string guid)
+    {
+        return db.Query<MedalDto>("SELECT id,name FROM mod_medals WHERE guid=@guid ORDER BY id", new { guid }).ToList();
+    }
+
+    // A creator shows the medals of their listed mods. Private, unapproved and removed mods don't count, so their names stay hidden.
+    public static List<MedalDto> CreatorMedals(Db db, string userId)
+    {
+        return db.Query<MedalDto>("""
+            SELECT x.id,x.name,m.guid mod_id,m.name mod_name FROM mod_medals x JOIN mods m ON m.guid=x.guid
+            WHERE m.author_id=@userId AND m.status='approved' AND m.visibility='public' ORDER BY x.id
+            """, new { userId }).ToList();
+    }
+
+    private List<MedalDto> CreatorMedals(string userId)
+    {
+        if (!_creatorMedals.TryGetValue(userId, out List<MedalDto>? medals))
+            _creatorMedals[userId] = medals = CreatorMedals(_db, userId);
+
+        return medals;
+    }
+
     public ModDto Mod(ModListRow row, bool full = false, string channelName = "stable")
     {
-        _topTen ??= _db.Query<string>("SELECT guid FROM mods WHERE status='approved' AND visibility='public' AND downloads>0 ORDER BY downloads DESC,guid LIMIT 10").ToHashSet();
-
         bool authorVerified = row.IsVerified != 0;
-        var badges = new List<string>();
-
-        if (_topTen.Contains(row.Guid))
-            badges.Add("Top 10 Downloads");
-
-        if (row.ChoiceCategory != null)
-            badges.Add("Modder’s Choice · " + row.ChoiceCategory);
-
         string id = authorVerified && !string.IsNullOrEmpty(row.CustomSlug) ? row.CustomSlug : row.Guid;
 
         var mod = new ModDto
@@ -112,7 +124,9 @@ public sealed class ModPresenter
             Status = row.Status,
             Visibility = row.Visibility,
             Banner = row.Banner,
-            ChoiceCategory = row.ChoiceCategory,
+            ModdersChoice = row.IsChoice != 0,
+            Medals = ModMedals(_db, row.Guid),
+            ChoiceNote = row.IsChoice != 0 && !string.IsNullOrWhiteSpace(row.ChoiceNote) ? row.ChoiceNote : null,
             CustomSlug = row.CustomSlug,
             Links = JsonNode.Parse(row.Links) ?? new JsonArray(),
             Author = new AuthorDto
@@ -121,11 +135,12 @@ public sealed class ModPresenter
                 Name = row.DisplayName,
                 DiscordUsername = row.AuthorId.StartsWith(Text.EmailAccountPrefix, StringComparison.Ordinal) || row.AuthorId.StartsWith("group-", StringComparison.Ordinal) ? "" : row.Username,
                 IsAdmin = row.IsAdmin != 0 || (_options.RootAdminId != "" && row.AuthorId == _options.RootAdminId),
+                IsDeveloper = row.IsDeveloper != 0,
                 IsVerified = authorVerified,
+                Medals = CreatorMedals(row.AuthorId),
                 Avatar = row.AuthorAvatar,
                 ProfileUrl = Text.ProfileUrl(row.AuthorId, row.AuthorSlug, authorVerified),
             },
-            Badges = badges,
             Id = id,
             Url = _options.PublicUrl + "/view/" + id,
             Loaders = ReleaseLoaders(row.Guid, channelName),
@@ -139,6 +154,9 @@ public sealed class ModPresenter
                 AND (t.guid=@guid OR EXISTS(SELECT 1 FROM tier_mods tm WHERE tm.tier_id=t.id AND tm.guid=@guid))
                 """, new { guid = row.Guid }),
             DonationsEnabled = _options.StripeConfigured && row.AuthorTransfers != 0,
+            ExtensionsEnabled = row.AcceptsExtensions,
+            DocsEnabled = row.HasDocs,
+            Extends = Extends(row.Guid),
         };
 
         if (!full && row.Visibility == "code")
@@ -165,7 +183,47 @@ public sealed class ModPresenter
         mod.DescriptionHtml = _markdown.Render(row.Description);
         mod.Tiers = Endpoints.SubscriptionEndpoints.TiersForMod(_db, row.Guid)
             .Select(t => Endpoints.SubscriptionEndpoints.Present(t, _db, _options, _context.User?.Id, false)).ToList();
+        mod.ExtensionCount = _db.Scalar<long>("SELECT COUNT(*) FROM mod_extensions e JOIN mods m ON m.guid=e.guid WHERE e.parent_guid=@guid AND e.state='approved' AND " + ListedExtension,
+            new { guid = row.Guid });
+        mod.DocCount = _db.Scalar<long>("SELECT COUNT(*) FROM mod_docs WHERE guid=@guid", new { guid = row.Guid });
 
         return mod;
+    }
+
+    // An extension shows up in its parent's listing only once staff have approved it as a public mod, so parent
+    // developers never moderate, and marketplaces never install, files that haven't been through review.
+    public const string ListedExtension = "m.status='approved' AND m.visibility='public'";
+
+    private sealed class ExtendsRow
+    {
+        public string State { get; set; } = "";
+        public int Featured { get; set; }
+        public string Guid { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string? CustomSlug { get; set; }
+        public int IsVerified { get; set; }
+    }
+
+    public ExtendsDto? Extends(string guid)
+    {
+        ExtendsRow? parent = _db.One<ExtendsRow>("""
+            SELECT e.state,e.featured,p.guid,p.name,p.custom_slug,u.is_verified FROM mod_extensions e
+            JOIN mods p ON p.guid=e.parent_guid JOIN users u ON u.id=p.author_id WHERE e.guid=@guid AND p.status!='deleted'
+            """, new { guid });
+
+        if (parent == null)
+            return null;
+
+        string id = parent.IsVerified != 0 && !string.IsNullOrEmpty(parent.CustomSlug) ? parent.CustomSlug : parent.Guid;
+
+        return new ExtendsDto
+        {
+            Guid = parent.Guid,
+            Id = id,
+            Name = parent.Name,
+            Url = _options.PublicUrl + "/view/" + Uri.EscapeDataString(id),
+            State = parent.State,
+            Featured = parent.Featured != 0,
+        };
     }
 }

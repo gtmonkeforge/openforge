@@ -112,11 +112,15 @@ while (true)
 
     SessionEndpoints.Map(app);
     AuthEndpoints.Map(app);
+    OAuthEndpoints.Map(app);
+    DeveloperEndpoints.Map(app);
     AccountEndpoints.Map(app);
     EmailEndpoints.Map(app);
     UserEndpoints.Map(app);
     ModEndpoints.Map(app);
     PublishEndpoints.Map(app);
+    ExtensionEndpoints.Map(app);
+    ModDocsEndpoints.Map(app);
     ChannelEndpoints.Map(app);
     CommunityEndpoints.Map(app);
     ManagementEndpoints.Map(app);

@@ -23,7 +23,7 @@ public static class PageEndpoints
         app.MapGet("/browse", Browse);
 
         // Signed-in tools carry noindex; only the public pages below are offered to search engines.
-        foreach (string path in new[] { "/upload", "/settings", "/settings/{section}", "/friends", "/chat", "/groups", "/transfers", "/notifications" })
+        foreach (string path in new[] { "/upload", "/settings", "/settings/{section}", "/settings/{section}/{item}", "/friends", "/chat", "/groups", "/transfers", "/notifications" })
             app.MapGet(path, (Shell shell) => shell.Page(meta: PageMeta.Private));
 
         // Sign-in pages must be on the public host: passkeys are bound to it, and so is the session cookie.
@@ -65,6 +65,9 @@ public static class PageEndpoints
 
         app.MapGet("/view/{guid}", ModPage);
         app.MapGet("/view/{value}/monkeshield", ShieldPage);
+        app.MapGet("/view/{value}/extensions", ExtensionsPage);
+        app.MapGet("/view/{value}/docs", (string value, HttpContext http, ForgeContext context, Access access, Db db, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics) => DocsPage(value, null, http, context, access, db, shell, seo, activity, diagnostics));
+        app.MapGet("/view/{value}/docs/{slug}", (string value, string slug, HttpContext http, ForgeContext context, Access access, Db db, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics) => DocsPage(value, slug, http, context, access, db, shell, seo, activity, diagnostics));
         app.MapGet("/profile", MyProfile);
         app.MapGet("/profile/{userId}", ProfilePage);
 
@@ -124,6 +127,36 @@ public static class PageEndpoints
         RecordView(http, activity, diagnostics, null);
 
         return shell.Page("MonkeShield · " + mod.Name, seo.Shield(access.ModWithAuthor(mod.Guid)!));
+    }
+
+    private static IResult ExtensionsPage(string value, HttpContext http, Access access, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
+    {
+        ModRow? row = access.ResolveMod(value);
+
+        if (!access.CanViewMod(row) || !row!.AcceptsExtensions)
+            throw ApiException.NotFound("This mod doesn't accept extensions.");
+
+        RecordView(http, activity, diagnostics, null);
+        return shell.Page("Extensions · " + row.Name, seo.Extensions(access.ModWithAuthor(row.Guid)!));
+    }
+
+    private static IResult DocsPage(string value, string? slug, HttpContext http, ForgeContext context, Access access, Db db, Shell shell, Seo seo, Activity activity, Diagnostics diagnostics)
+    {
+        ModRow? row = access.ResolveMod(value);
+
+        // Developers can open the tab while it's switched off, to write pages before anyone else sees them.
+        if (!access.CanViewMod(row) || (!row!.HasDocs && !access.CanManage(context.User, row)))
+            throw ApiException.NotFound("This mod has no documentation.");
+
+        ModDocRow? page = slug == null
+            ? db.One<ModDocRow>("SELECT * FROM mod_docs WHERE guid=@guid ORDER BY position,id LIMIT 1", new { guid = row.Guid })
+            : db.One<ModDocRow>("SELECT * FROM mod_docs WHERE guid=@guid AND slug=@slug", new { guid = row.Guid, slug })
+                ?? throw ApiException.NotFound("This documentation page could not be found.");
+
+        RecordView(http, activity, diagnostics, null);
+        string title = (page == null ? "Docs" : page.Title) + " · " + row.Name;
+
+        return shell.Page(title, row.HasDocs ? seo.Doc(access.ModWithAuthor(row.Guid)!, page) : PageMeta.Private);
     }
 
     private static IResult MyProfile(ForgeContext context)
